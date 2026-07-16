@@ -66,6 +66,7 @@ export default function Home() {
   const [refreshInterval, setRefreshInterval] = useState(2500);
   const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
+  const [theme, setTheme] = useState<"night" | "day">("night");
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
@@ -113,11 +114,17 @@ export default function Home() {
   useEffect(() => {
     const saved = Number(window.localStorage.getItem("pulseboard-refresh"));
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
+    if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
   }, []);
 
   useEffect(() => {
     window.localStorage.setItem("pulseboard-refresh", String(refreshInterval));
   }, [refreshInterval]);
+
+  useEffect(() => {
+    window.localStorage.setItem("pulseboard-theme", theme);
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -143,7 +150,7 @@ export default function Home() {
   const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
 
   return (
-    <main className="shell">
+    <main className={`shell ${theme === "day" ? "themeDay" : ""}`}>
       <aside className="rail" aria-label="System views">
         <div className="brand" aria-label="Pulseboard">P</div>
         <nav>
@@ -167,8 +174,7 @@ export default function Home() {
           </div>
           <div className="topActions">
             <div className={`health ${isHealthy ? "" : status === "offline" ? "offline" : "attention"}`}><i /> {status === "offline" ? "Mac feed offline" : isHealthy ? "All systems normal" : "Checking system"}</div>
-            <button className="iconButton" aria-label="Search">⌕</button>
-            <button className="iconButton notification" aria-label="Notifications">●</button>
+            <button className="themeButton" aria-label={theme === "night" ? "Switch to day mode" : "Switch to night mode"} aria-pressed={theme === "day"} onClick={() => setTheme((current) => current === "night" ? "day" : "night")}><span aria-hidden="true">{theme === "night" ? "☀" : "☾"}</span><b>{theme === "night" ? "Day mode" : "Night mode"}</b></button>
             <button className="pauseButton" onClick={() => setPaused((value) => !value)} disabled={status === "offline"}>{paused ? "Resume live" : "Pause live"}</button>
           </div>
         </header>
