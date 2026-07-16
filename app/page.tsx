@@ -61,6 +61,14 @@ export default function Home() {
   const [range, setRange] = useState<"1H" | "6H" | "24H">("1H");
   const [paused, setPaused] = useState(false);
   const [cpuHistory, setCpuHistory] = useState<number[]>(Array(36).fill(0));
+  const [activeView, setActiveView] = useState("overview");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(2500);
+
+  const navigateTo = useCallback((target: string) => {
+    setActiveView(target);
+    document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
 
   const fetchTelemetry = useCallback(async () => {
     const controller = new AbortController();
@@ -82,9 +90,26 @@ export default function Home() {
   useEffect(() => {
     void fetchTelemetry();
     if (paused) return;
-    const id = window.setInterval(() => void fetchTelemetry(), 2500);
+    const id = window.setInterval(() => void fetchTelemetry(), refreshInterval);
     return () => window.clearInterval(id);
-  }, [fetchTelemetry, paused]);
+  }, [fetchTelemetry, paused, refreshInterval]);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem("pulseboard-refresh"));
+    if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("pulseboard-refresh", String(refreshInterval));
+  }, [refreshInterval]);
+
+  useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSettingsOpen(false);
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
 
   const processes = useMemo(() => {
     const items = telemetry?.processes.items || [];
@@ -106,14 +131,14 @@ export default function Home() {
       <aside className="rail" aria-label="System views">
         <div className="brand" aria-label="Pulseboard">P</div>
         <nav>
-          <button className="railButton active" aria-label="Overview"><Mark>⌁</Mark><span>Overview</span></button>
-          <button className="railButton" aria-label="Performance"><Mark>⌇</Mark><span>Performance</span></button>
-          <button className="railButton" aria-label="Storage"><Mark>◫</Mark><span>Storage</span></button>
-          <button className="railButton" aria-label="Network"><Mark>↗</Mark><span>Network</span></button>
-          <button className="railButton" aria-label="Processes"><Mark>≡</Mark><span>Processes</span></button>
+          <button className={`railButton ${activeView === "overview" && !settingsOpen ? "active" : ""}`} aria-label="Overview" aria-current={activeView === "overview" ? "page" : undefined} onClick={() => navigateTo("overview")}><Mark>⌁</Mark><span>Overview</span></button>
+          <button className={`railButton ${activeView === "performance" && !settingsOpen ? "active" : ""}`} aria-label="Performance" aria-current={activeView === "performance" ? "page" : undefined} onClick={() => navigateTo("performance")}><Mark>⌇</Mark><span>Performance</span></button>
+          <button className={`railButton ${activeView === "storage" && !settingsOpen ? "active" : ""}`} aria-label="Storage" aria-current={activeView === "storage" ? "page" : undefined} onClick={() => navigateTo("storage")}><Mark>◫</Mark><span>Storage</span></button>
+          <button className={`railButton ${activeView === "network" && !settingsOpen ? "active" : ""}`} aria-label="Network" aria-current={activeView === "network" ? "page" : undefined} onClick={() => navigateTo("network")}><Mark>↗</Mark><span>Network</span></button>
+          <button className={`railButton ${activeView === "processes" && !settingsOpen ? "active" : ""}`} aria-label="Processes" aria-current={activeView === "processes" ? "page" : undefined} onClick={() => navigateTo("processes")}><Mark>≡</Mark><span>Processes</span></button>
         </nav>
         <div className="railBottom">
-          <button className="railButton" aria-label="Settings"><Mark>⚙</Mark><span>Settings</span></button>
+          <button className={`railButton ${settingsOpen ? "active" : ""}`} aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}><Mark>⚙</Mark><span>Settings</span></button>
           <div className="avatar">TC</div>
         </div>
       </aside>
@@ -141,12 +166,12 @@ export default function Home() {
             </section>
           )}
 
-          <section className="headingRow">
+          <section className="headingRow scrollTarget" id="overview">
             <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{status === "live" ? (isHealthy ? "Your Mac is running smoothly." : "Your Mac needs attention.") : "Connect your Mac to begin."}</h1><p className="subhead">Real performance and health, directly from macOS.</p></div>
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `Live · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
-          <section className="metricsGrid">
+          <section className="metricsGrid scrollTarget" id="performance">
             <article className="card cpuCard">
               <div className="cardHeader"><div><p className="label">CPU LOAD</p><div className="bigValue">{cpu.toFixed(1)}<span>%</span></div></div>{status === "live" && <div className={`delta ${delta <= 0 ? "good" : "up"}`}>{delta <= 0 ? "↓" : "↑"} {Math.abs(delta).toFixed(1)}%</div>}</div>
               <div className="chart" aria-label={`CPU load ${cpu.toFixed(1)} percent`}>
@@ -175,14 +200,14 @@ export default function Home() {
           </section>
 
           <section className="quickGrid">
-            <article className="miniCard"><Mark>↑↓</Mark><div><p>NETWORK · {telemetry?.network.interface || "—"}</p><b>{download.value} <small>{download.unit}</small></b><span>↓ Download</span></div><div className="miniStat"><b>{upload.value} <small>{upload.unit}</small></b><span>↑ Upload</span></div></article>
+            <article className="miniCard scrollTarget" id="network"><Mark>↑↓</Mark><div><p>NETWORK · {telemetry?.network.interface || "—"}</p><b>{download.value} <small>{download.unit}</small></b><span>↓ Download</span></div><div className="miniStat"><b>{upload.value} <small>{upload.unit}</small></b><span>↑ Upload</span></div></article>
             <article className="miniCard"><Mark>◷</Mark><div><p>UPTIME</p><b>{uptime(telemetry?.uptimeSeconds)}</b><span>Since last restart</span></div></article>
             <article className="miniCard"><Mark>▤</Mark><div><p>PROCESSES</p><b>{telemetry?.processes.total || 0}</b><span>{telemetry?.processes.running || 0} running</span></div><div className="miniStat"><b>{telemetry?.device.logicalCores || 0}</b><span>Logical cores</span></div></article>
             <article className="miniCard"><Mark>⌁</Mark><div><p>POWER DRAW</p><b>{telemetry?.battery.powerWatts?.toFixed(1) || "—"} <small>W</small></b><span>{telemetry?.battery.state || "Unavailable"}</span></div><span className="stable">Live</span></article>
           </section>
 
           <section className="lowerGrid">
-            <article className="card processCard">
+            <article className="card processCard scrollTarget" id="processes">
               <div className="sectionHeader"><div><p className="label">TOP PROCESSES</p><h2>What&apos;s using your Mac</h2></div><div className="segmented"><button className={sort === "cpu" ? "selected" : ""} onClick={() => setSort("cpu")}>CPU</button><button className={sort === "memory" ? "selected" : ""} onClick={() => setSort("memory")}>Memory</button></div></div>
               <div className="processTable">
                 <div className="tableHead"><span>PROCESS</span><span>PID</span><span>CPU</span><span>MEMORY</span><span>ENERGY</span></div>
@@ -198,7 +223,7 @@ export default function Home() {
             </article>
 
             <div className="sideStack">
-              <article className="card storageCard">
+              <article className="card storageCard scrollTarget" id="storage">
                 <div className="cardHeader"><div><p className="label">STORAGE</p><h2>{telemetry?.disk.name || "Macintosh HD"}</h2></div><Mark>•••</Mark></div>
                 <div className="storageLead"><b>{gb(telemetry?.disk.freeBytes, 0)} GB</b><span>free of {gb(telemetry?.disk.totalBytes, 0)} GB</span></div>
                 <div className="storageBar simple"><i style={{ width: `${telemetry?.disk.percent || 0}%` }} /></div>
@@ -220,6 +245,29 @@ export default function Home() {
           <footer><span>Pulseboard · Real local telemetry</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "No system data leaves your Mac"}</span></footer>
         </div>
       </section>
+
+      {settingsOpen && (
+        <div className="modalBackdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
+          <section className="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <div className="settingsHeader"><div><p className="eyebrow">PULSEBOARD</p><h2 id="settings-title">Settings</h2></div><button className="closeButton" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>×</button></div>
+            <div className="settingGroup">
+              <div><b>Refresh speed</b><span>How often Pulseboard asks the local companion for new metrics.</span></div>
+              <div className="refreshChoices">
+                {[{ value: 2500, label: "Fast", note: "2.5s" }, { value: 5000, label: "Balanced", note: "5s" }, { value: 10000, label: "Efficient", note: "10s" }].map((choice) => (
+                  <button key={choice.value} className={refreshInterval === choice.value ? "selected" : ""} onClick={() => setRefreshInterval(choice.value)}><b>{choice.label}</b><span>{choice.note}</span></button>
+                ))}
+              </div>
+            </div>
+            <div className="settingGroup connectionSetting">
+              <div><b>Local companion</b><span>Runs quietly in the background and starts automatically with your Mac.</span></div>
+              <div className={`connectionPill ${status}`}><i />{status === "live" ? "Connected" : status === "connecting" ? "Connecting" : "Offline"}</div>
+              <button className="settingsAction" onClick={() => { setStatus("connecting"); void fetchTelemetry(); }}>Reconnect now</button>
+            </div>
+            <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Metrics travel directly from the companion to this browser tab. Pulseboard does not upload or store your system data.</span></div></div>
+            <div className="settingsFooter"><span>Companion endpoint</span><code>127.0.0.1:4319</code></div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }
