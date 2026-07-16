@@ -64,6 +64,8 @@ export default function Home() {
   const [activeView, setActiveView] = useState("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(2500);
+  const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
+  const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
@@ -72,7 +74,7 @@ export default function Home() {
 
   const fetchTelemetry = useCallback(async () => {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 3500);
+    const timeout = window.setTimeout(() => controller.abort(), 1000);
     try {
       const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
       if (!response.ok) throw new Error("Companion unavailable");
@@ -80,8 +82,22 @@ export default function Home() {
       setTelemetry(next);
       setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
       setStatus("live");
+      setTransport("direct");
+      setRelayAgeSeconds(0);
     } catch {
-      setStatus("offline");
+      try {
+        const relayResponse = await fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" });
+        if (!relayResponse.ok) throw new Error("Relay unavailable");
+        const relay = await relayResponse.json() as { telemetry: Telemetry; ageSeconds: number; stale: boolean };
+        setTelemetry(relay.telemetry);
+        setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
+        setStatus("live");
+        setTransport("relay");
+        setRelayAgeSeconds(relay.ageSeconds);
+      } catch {
+        setStatus("offline");
+        setTransport(null);
+      }
     } finally {
       window.clearTimeout(timeout);
     }
@@ -150,7 +166,7 @@ export default function Home() {
             <div><p>{telemetry?.device.name || "Waiting for your Mac"}</p><span>{telemetry ? `${telemetry.device.chip} · ${gb(telemetry.memory.totalBytes, 0)} GB · ${telemetry.device.os}` : "Pulseboard Companion"}</span></div>
           </div>
           <div className="topActions">
-            <div className={`health ${isHealthy ? "" : status === "offline" ? "offline" : "attention"}`}><i /> {status === "offline" ? "Companion offline" : isHealthy ? "All systems normal" : "Checking system"}</div>
+            <div className={`health ${isHealthy ? "" : status === "offline" ? "offline" : "attention"}`}><i /> {status === "offline" ? "Mac feed offline" : isHealthy ? "All systems normal" : "Checking system"}</div>
             <button className="iconButton" aria-label="Search">⌕</button>
             <button className="iconButton notification" aria-label="Notifications">●</button>
             <button className="pauseButton" onClick={() => setPaused((value) => !value)} disabled={status === "offline"}>{paused ? "Resume live" : "Pause live"}</button>
@@ -161,14 +177,14 @@ export default function Home() {
           {status === "offline" && (
             <section className="connectionBanner" role="status">
               <div className="connectionIcon">P</div>
-              <div><b>Pulseboard Companion is offline</b><span>Start the companion on this Mac to see actual system telemetry. No data leaves your computer.</span></div>
+              <div><b>No live Mac feed is available</b><span>Make sure your Mac is awake and the Pulseboard Companion is running. Mobile devices connect through the encrypted relay.</span></div>
               <button onClick={() => { setStatus("connecting"); void fetchTelemetry(); }}>Retry connection</button>
             </section>
           )}
 
           <section className="headingRow scrollTarget" id="overview">
             <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{status === "live" ? (isHealthy ? "Your Mac is running smoothly." : "Your Mac needs attention.") : "Connect your Mac to begin."}</h1><p className="subhead">Real performance and health, directly from macOS.</p></div>
-            <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `Live · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
+            <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
           <section className="metricsGrid scrollTarget" id="performance">
@@ -242,7 +258,7 @@ export default function Home() {
             <div className="historyBars" aria-hidden="true">{cpuHistory.map((height, index) => <i key={index} style={{ height: `${Math.max(2, height)}%` }} />)}</div>
             <div className="rangeControl">{(["1H", "6H", "24H"] as const).map((item) => <button key={item} className={range === item ? "selected" : ""} onClick={() => setRange(item)}>{item}</button>)}</div>
           </section>
-          <footer><span>Pulseboard · Real local telemetry</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "No system data leaves your Mac"}</span></footer>
+          <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for your Mac"}</span></footer>
         </div>
       </section>
 
@@ -251,7 +267,7 @@ export default function Home() {
           <section className="settingsPanel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
             <div className="settingsHeader"><div><p className="eyebrow">PULSEBOARD</p><h2 id="settings-title">Settings</h2></div><button className="closeButton" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>×</button></div>
             <div className="settingGroup">
-              <div><b>Refresh speed</b><span>How often Pulseboard asks the local companion for new metrics.</span></div>
+              <div><b>Refresh speed</b><span>How often Pulseboard checks the active telemetry connection for new metrics.</span></div>
               <div className="refreshChoices">
                 {[{ value: 2500, label: "Fast", note: "2.5s" }, { value: 5000, label: "Balanced", note: "5s" }, { value: 10000, label: "Efficient", note: "10s" }].map((choice) => (
                   <button key={choice.value} className={refreshInterval === choice.value ? "selected" : ""} onClick={() => setRefreshInterval(choice.value)}><b>{choice.label}</b><span>{choice.note}</span></button>
@@ -259,12 +275,12 @@ export default function Home() {
               </div>
             </div>
             <div className="settingGroup connectionSetting">
-              <div><b>Local companion</b><span>Runs quietly in the background and starts automatically with your Mac.</span></div>
-              <div className={`connectionPill ${status}`}><i />{status === "live" ? "Connected" : status === "connecting" ? "Connecting" : "Offline"}</div>
+              <div><b>Mac companion</b><span>Runs quietly in the background, starts automatically, and securely relays metrics to your mobile devices.</span></div>
+              <div className={`connectionPill ${status}`}><i />{status === "live" ? (transport === "relay" ? "Relay connected" : "Direct connected") : status === "connecting" ? "Connecting" : "Offline"}</div>
               <button className="settingsAction" onClick={() => { setStatus("connecting"); void fetchTelemetry(); }}>Reconnect now</button>
             </div>
-            <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Metrics travel directly from the companion to this browser tab. Pulseboard does not upload or store your system data.</span></div></div>
-            <div className="settingsFooter"><span>Companion endpoint</span><code>127.0.0.1:4319</code></div>
+            <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Direct viewing stays on your Mac. Mobile viewing uses an authenticated encrypted relay that keeps only the newest telemetry snapshot.</span></div></div>
+            <div className="settingsFooter"><span>Current connection</span><code>{transport === "relay" ? "Encrypted cloud relay" : transport === "direct" ? "127.0.0.1:4319" : "Not connected"}</code></div>
           </section>
         </div>
       )}

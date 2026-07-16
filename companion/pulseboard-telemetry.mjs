@@ -1,12 +1,14 @@
 #!/usr/bin/env node
 
 import http from "node:http";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
 const HOST = "127.0.0.1";
 const PORT = 4319;
+const CONFIG_PATH = path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
 const ALLOWED_ORIGINS = new Set([
   "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
   "http://localhost:3000",
@@ -36,6 +38,7 @@ let previousCpu = cpuSnapshot();
 let previousCpuUsage = 0;
 let previousNetwork = null;
 let previousNetworkAt = Date.now();
+let relayState = "starting";
 
 function cpuUsage() {
   const current = cpuSnapshot();
@@ -163,6 +166,53 @@ function collectTelemetry() {
   };
 }
 
+function relayConfig() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    if (!config.relayUrl || !config.deviceToken || !config.siwcToken) return null;
+    return config;
+  } catch {
+    return null;
+  }
+}
+
+async function uploadTelemetry(snapshot) {
+  const config = relayConfig();
+  if (!config) {
+    relayState = "not-configured";
+    return;
+  }
+  try {
+    const response = await fetch(`${config.relayUrl}/api/telemetry`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.deviceToken}`,
+        "OAI-Sites-Authorization": `Bearer ${config.siwcToken}`,
+      },
+      body: JSON.stringify(snapshot),
+      signal: AbortSignal.timeout(8000),
+    });
+    relayState = response.ok ? "connected" : `error-${response.status}`;
+  } catch {
+    relayState = "unreachable";
+  }
+}
+
+let latestTelemetry = collectTelemetry();
+let collecting = false;
+
+async function refreshTelemetry() {
+  if (collecting) return;
+  collecting = true;
+  try {
+    latestTelemetry = collectTelemetry();
+    await uploadTelemetry(latestTelemetry);
+  } finally {
+    collecting = false;
+  }
+}
+
 function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.has(origin) ? origin : "";
   return {
@@ -196,7 +246,7 @@ const server = http.createServer((request, response) => {
   }
   try {
     response.writeHead(200, { "Content-Type": "application/json", ...headers });
-    response.end(JSON.stringify(collectTelemetry()));
+    response.end(JSON.stringify({ ...latestTelemetry, relay: { state: relayState } }));
   } catch (error) {
     response.writeHead(500, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Telemetry failed" }));
@@ -205,8 +255,11 @@ const server = http.createServer((request, response) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`Pulseboard Companion is running at http://${HOST}:${PORT}`);
-  console.log("Keep this window open while using the dashboard.");
+  console.log("Live telemetry is available locally and through the encrypted relay.");
 });
 
-process.on("SIGINT", () => server.close(() => process.exit(0)));
-process.on("SIGTERM", () => server.close(() => process.exit(0)));
+const relayTimer = setInterval(() => void refreshTelemetry(), 5000);
+void refreshTelemetry();
+
+process.on("SIGINT", () => { clearInterval(relayTimer); server.close(() => process.exit(0)); });
+process.on("SIGTERM", () => { clearInterval(relayTimer); server.close(() => process.exit(0)); });

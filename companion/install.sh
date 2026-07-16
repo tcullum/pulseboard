@@ -5,8 +5,25 @@ SCRIPT_DIR="${0:A:h}"
 NODE_PATH="$(command -v node)"
 PLIST_PATH="$HOME/Library/LaunchAgents/com.pulseboard.telemetry.plist"
 LOG_DIR="$HOME/Library/Logs/Pulseboard"
+CONFIG_DIR="$HOME/Library/Application Support/Pulseboard"
+CONFIG_PATH="$CONFIG_DIR/relay.json"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$CONFIG_DIR"
+
+if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" && -n "${PULSEBOARD_SIWC_TOKEN:-}" ]]; then
+  umask 077
+  PULSEBOARD_CONFIG_PATH="$CONFIG_PATH" \
+  PULSEBOARD_RELAY_TOKEN="$PULSEBOARD_RELAY_TOKEN" \
+  PULSEBOARD_SIWC_TOKEN="$PULSEBOARD_SIWC_TOKEN" \
+  "$NODE_PATH" -e '
+    const fs = require("node:fs");
+    fs.writeFileSync(process.env.PULSEBOARD_CONFIG_PATH, JSON.stringify({
+      relayUrl: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
+      deviceToken: process.env.PULSEBOARD_RELAY_TOKEN,
+      siwcToken: process.env.PULSEBOARD_SIWC_TOKEN,
+    }, null, 2));
+  '
+fi
 
 sed \
   -e "s|__NODE__|$NODE_PATH|g" \
