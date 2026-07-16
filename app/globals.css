@@ -59,6 +59,8 @@ h1 { font-size:29px; letter-spacing:-.035em; margin:0 0 7px; font-weight:650; }
 .cardHeader { display:flex; align-items:flex-start; justify-content:space-between; }
 .bigValue { font:600 34px/1 var(--font-geist-mono),monospace; letter-spacing:-.06em; }
 .bigValue span { font-size:15px; color:#93a9bb; letter-spacing:-.02em; }
+.cpuCard .bigValue { display:flex; align-items:baseline; gap:7px; }
+.cpuCard .bigValue span { font-size:18px; letter-spacing:0; }
 .delta { padding:5px 7px; border-radius:7px; font:600 9px var(--font-geist-mono),monospace; }
 .delta.good { color:var(--green); background:rgba(94,230,168,.09); }
 .delta.up { color:var(--amber); background:rgba(244,184,90,.09); }
