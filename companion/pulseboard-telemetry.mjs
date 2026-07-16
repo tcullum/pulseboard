@@ -112,6 +112,7 @@ function thermalStats() {
 function networkStats() {
   const route = run("/sbin/route", ["-n", "get", "default"]);
   const interfaceName = route.match(/interface:\s*(\S+)/)?.[1] || "en0";
+  const address = (os.networkInterfaces()[interfaceName] || []).find((entry) => entry.family === "IPv4" && !entry.internal)?.address || "Unavailable";
   const lines = run("/usr/sbin/netstat", ["-ibn"]).split("\n");
   const linkLine = lines.find((line) => line.startsWith(`${interfaceName} `) && line.includes("<Link#"));
   const columns = linkLine?.trim().split(/\s+/) || [];
@@ -122,7 +123,7 @@ function networkStats() {
   const uploadBytesPerSecond = previousNetwork ? Math.max(0, (current.sent - previousNetwork.sent) / elapsed) : 0;
   previousNetwork = current;
   previousNetworkAt = now;
-  return { interface: interfaceName, downloadBytesPerSecond, uploadBytesPerSecond };
+  return { interface: interfaceName, address, downloadBytesPerSecond, uploadBytesPerSecond };
 }
 
 function processStats() {
