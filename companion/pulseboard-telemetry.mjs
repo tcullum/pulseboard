@@ -4,7 +4,7 @@ import http from "node:http";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomFillSync } from "node:crypto";
 
 const HOST = "127.0.0.1";
@@ -12,12 +12,62 @@ const PORT = 4319;
 const MAX_SPEED_BYTES = 100 * 1024 * 1024;
 const SPEED_BUFFER_BYTES = 8 * 1024 * 1024;
 const SPEED_CHUNK_BYTES = 64 * 1024;
+const IPERF3_DURATION_SECONDS = 8;
+const IPERF3_OMIT_SECONDS = 1;
+const IPERF3_PARALLEL_STREAMS = 4;
+const IPERF3_TIMEOUT_MS = 22_000;
 const CONFIG_PATH = path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
 const ALLOWED_ORIGINS = new Set([
   "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]);
+const IPERF3_SERVERS = [
+  { id: "ca-montreal-leaseweb-0", city: "Montreal", country: "CA", provider: "LeaseWeb", host: "speedtest.mtl2.ca.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "ca-montreal-telus-1", city: "Montreal", country: "CA", provider: "TELUS", host: "speedtest.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "10" },
+  { id: "ca-montreal-goco-2", city: "Montréal", country: "CA", provider: "goco", host: "as21723.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "—" },
+  { id: "ca-ottawa-fortisase-3", city: "Ottawa", country: "CA", provider: "FortiSASE", host: "173.243.131.29", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-toronto-datapacket-4", city: "Toronto", country: "CA", provider: "DATAPACKET", host: "138.199.57.129", ports: [5201], capacity: "2x10" },
+  { id: "ca-toronto-fortisase-5", city: "Toronto", country: "CA", provider: "FortiSASE", host: "96.45.43.6", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-vancouver-fortisase-6", city: "Vancouver", country: "CA", provider: "FortiSASE", host: "66.35.30.9", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-victoria-couch-ca-7", city: "Victoria", country: "CA", provider: "couch.ca", host: "speed.couch.ca", ports: [15201, 15202, 15203, 15204], capacity: "1" },
+  { id: "ca-woodstock-xplore-8", city: "Woodstock", country: "CA", provider: "Xplore", host: "yyc-speedtest.xplore.ca", ports: [8070, 8071, 8072, 8073], capacity: "—" },
+  { id: "us-ashburn-clouvider-9", city: "Ashburn", country: "US", provider: "Clouvider", host: "ash.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-ashburn-datapacket-10", city: "Ashburn", country: "US", provider: "DATAPACKET", host: "37.19.206.20", ports: [5201], capacity: "2x10" },
+  { id: "us-ashburn-fortisase-11", city: "Ashburn", country: "US", provider: "FortiSASE", host: "66.35.22.79", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-atlanta-clouvider-12", city: "Atlanta", country: "US", provider: "Clouvider", host: "atl.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-atlanta-datapacket-13", city: "Atlanta", country: "US", provider: "DATAPACKET", host: "185.152.66.67", ports: [5201], capacity: "2x10" },
+  { id: "us-boston-datapacket-14", city: "Boston", country: "US", provider: "DATAPACKET", host: "109.61.86.65", ports: [5201], capacity: "2x10" },
+  { id: "us-chicago-leaseweb-15", city: "Chicago", country: "US", provider: "LeaseWeb", host: "speedtest.chi11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-chicago-datapacket-16", city: "Chicago", country: "US", provider: "DATAPACKET", host: "185.93.1.65", ports: [5201], capacity: "2x10" },
+  { id: "us-chicago-clouvider-17", city: "Chicago", country: "US", provider: "Clouvider", host: "chi.speedtest.clouvider.net", ports: [5202, 5203, 5204, 5205], capacity: "10" },
+  { id: "us-dallas-leaseweb-18", city: "Dallas", country: "US", provider: "LeaseWeb", host: "speedtest.dal13.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-dallas-clouvider-19", city: "Dallas", country: "US", provider: "Clouvider", host: "dal.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-dallas-datapacket-20", city: "Dallas", country: "US", provider: "DATAPACKET", host: "89.187.164.1", ports: [5201], capacity: "2x10" },
+  { id: "us-dallas-interserver-net-21", city: "Dallas", country: "US", provider: "InterServer.net", host: "dfw.speedtest.is.cc", ports: [5203, 5204, 5205, 5206], capacity: "100" },
+  { id: "us-dallas-fortisase-22", city: "Dallas", country: "US", provider: "FortiSASE", host: "66.35.27.207", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-houston-datapacket-23", city: "Houston", country: "US", provider: "DATAPACKET", host: "37.19.216.1", ports: [5201], capacity: "2x10" },
+  { id: "us-kansas-city-nocix-24", city: "Kansas City", country: "US", provider: "NOCIX", host: "speedtest.nocix.net", ports: [5201, 5202, 5203, 5204], capacity: "200" },
+  { id: "us-los-angeles-clouvider-25", city: "Los Angeles", country: "US", provider: "Clouvider", host: "la.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-los-angeles-leaseweb-26", city: "Los Angeles", country: "US", provider: "LeaseWeb", host: "speedtest.lax12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-los-angeles-datapacket-27", city: "Los Angeles", country: "US", provider: "DATAPACKET", host: "185.152.67.2", ports: [5201], capacity: "2x10" },
+  { id: "us-miami-leaseweb-28", city: "Miami", country: "US", provider: "LeaseWeb", host: "speedtest.mia11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-miami-datapacket-29", city: "Miami", country: "US", provider: "DATAPACKET", host: "195.181.162.195", ports: [5201], capacity: "2x10" },
+  { id: "us-miami-fortisase-30", city: "Miami", country: "US", provider: "FortiSASE", host: "23.249.54.234", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-new-york-hostkey-31", city: "New York", country: "US", provider: "HOSTKEY", host: "spd-uswb.hostkey.com", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-new-york-datapacket-32", city: "New York", country: "US", provider: "DATAPACKET", host: "185.59.223.8", ports: [5201], capacity: "2x10" },
+  { id: "us-new-york-city-leaseweb-33", city: "New York City", country: "US", provider: "LeaseWeb", host: "speedtest.nyc1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-phoenix-leaseweb-34", city: "Phoenix", country: "US", provider: "LeaseWeb", host: "speedtest.phx1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-phoenix-clouvider-35", city: "Phoenix", country: "US", provider: "Clouvider", host: "phx.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-plano-fortisase-36", city: "Plano", country: "US", provider: "FortiSASE", host: "209.40.123.215", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-salt-lake-xmission-37", city: "Salt Lake", country: "US", provider: "XMISSION", host: "speedtest.xmission.com", ports: [5201, 5202, 5203, 5204], capacity: "—" },
+  { id: "us-san-francisco-leaseweb-38", city: "San Francisco", country: "US", provider: "LeaseWeb", host: "speedtest.sfo12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-san-jose-fortisase-39", city: "San Jose", country: "US", provider: "FortiSASE", host: "66.35.20.123", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-san-jose-fortisase-40", city: "San Jose", country: "US", provider: "FortiSASE", host: "148.230.59.38", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-seattle-leaseweb-41", city: "Seattle", country: "US", provider: "LeaseWeb", host: "speedtest.sea11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-seattle-datapacket-42", city: "Seattle", country: "US", provider: "DATAPACKET", host: "84.17.41.11", ports: [5201], capacity: "2x10" },
+  { id: "us-washington-leaseweb-43", city: "Washington", country: "US", provider: "LeaseWeb", host: "speedtest.wdc2.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+];
 
 function run(command, args = []) {
   try {
@@ -25,6 +75,66 @@ function run(command, args = []) {
   } catch {
     return "";
   }
+}
+
+function findIperf3() {
+  const candidates = [
+    process.env.IPERF3_PATH,
+    "/opt/homebrew/bin/iperf3",
+    "/usr/local/bin/iperf3",
+    "/usr/bin/iperf3",
+    "iperf3",
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      const version = execFileSync(candidate, ["--version"], { encoding: "utf8", timeout: 1500, maxBuffer: 128 * 1024 }).split("\n")[0]?.trim();
+      if (version) return { path: candidate, version };
+    } catch {
+      // Try the next common install location.
+    }
+  }
+  return null;
+}
+
+function spawnText(command, args, { timeoutMs = IPERF3_TIMEOUT_MS, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", abort);
+      child.kill("SIGTERM");
+      reject(new Error("The iPerf3 test timed out."));
+    }, timeoutMs);
+    const abort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      child.kill("SIGTERM");
+      reject(new Error("The iPerf3 test was stopped."));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", abort);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr.trim() || `iperf3 exited with code ${code}`));
+    });
+  });
 }
 
 function sysctl(key, fallback = "") {
@@ -321,6 +431,138 @@ function handleSpeedTest(request, response, headers, url) {
   return false;
 }
 
+function pingStats(host) {
+  const output = run("/sbin/ping", ["-c", "4", "-n", "-W", "1000", host]);
+  const samples = [...output.matchAll(/time=([\d.]+)\s*ms/g)].map((match) => Number(match[1])).filter(Number.isFinite);
+  if (!samples.length) return { ping: 0, jitter: 0 };
+  const sorted = [...samples].sort((a, b) => a - b);
+  const deltas = sorted.slice(1).map((value, index) => Math.abs(value - sorted[index]));
+  const averageDelta = deltas.length ? deltas.reduce((total, value) => total + value, 0) / deltas.length : 0;
+  return { ping: sorted[Math.floor(sorted.length / 2)], jitter: averageDelta };
+}
+
+function iperfMbps(report, reverse) {
+  const end = report?.end || {};
+  const sum = reverse ? (end.sum_received || end.sum_sent) : (end.sum_sent || end.sum_received);
+  const bitsPerSecond = Number(sum?.bits_per_second || 0);
+  return Number.isFinite(bitsPerSecond) ? bitsPerSecond / 1_000_000 : 0;
+}
+
+async function runIperfDirection(binary, server, reverse, signal) {
+  const errors = [];
+  for (const port of server.ports) {
+    const args = [
+      "-J",
+      "-c", server.host,
+      "-p", String(port),
+      "-t", String(IPERF3_DURATION_SECONDS),
+      "-O", String(IPERF3_OMIT_SECONDS),
+      "-P", String(IPERF3_PARALLEL_STREAMS),
+      "--connect-timeout", "4000",
+    ];
+    if (reverse) args.push("-R");
+    try {
+      const { stdout } = await spawnText(binary, args, { signal });
+      const report = JSON.parse(stdout);
+      const mbps = iperfMbps(report, reverse);
+      if (mbps > 0) return { mbps, port };
+      errors.push(`port ${port}: no throughput reported`);
+    } catch (error) {
+      errors.push(`port ${port}: ${error instanceof Error ? error.message : "failed"}`);
+    }
+  }
+  throw new Error(errors.at(-1) || "The selected iPerf3 server did not respond.");
+}
+
+function readJsonBody(request, maxBytes = 32 * 1024) {
+  return new Promise((resolve, reject) => {
+    let received = 0;
+    let raw = "";
+    request.on("data", (chunk) => {
+      received += chunk.length;
+      if (received > maxBytes) {
+        reject(new Error("Request body is too large."));
+        request.destroy();
+        return;
+      }
+      raw += chunk.toString();
+    });
+    request.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch {
+        reject(new Error("Request body must be JSON."));
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
+async function handleIperf3(request, response, headers, url) {
+  const binary = findIperf3();
+  if (request.method === "GET" && url.pathname === "/iperf3/servers") {
+    response.writeHead(binary ? 200 : 503, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({
+      available: Boolean(binary),
+      version: binary?.version || "",
+      servers: IPERF3_SERVERS,
+      error: binary ? "" : "iperf3 is not installed. Install it with Homebrew (`brew install iperf3`) and restart Pulseboard Companion.",
+    }));
+    return true;
+  }
+
+  if (request.method !== "POST" || url.pathname !== "/iperf3/test") return false;
+  if (!binary) {
+    response.writeHead(503, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ error: "iperf3 is not installed. Install it with Homebrew (`brew install iperf3`) and restart Pulseboard Companion." }));
+    return true;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(request);
+  } catch (error) {
+    response.writeHead(400, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ error: error instanceof Error ? error.message : "Invalid request." }));
+    return true;
+  }
+
+  const server = IPERF3_SERVERS.find((candidate) => candidate.id === body.serverId);
+  if (!server) {
+    response.writeHead(400, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ error: "Choose one of the allowlisted North America iPerf3 servers." }));
+    return true;
+  }
+
+  const abort = new AbortController();
+  let finished = false;
+  response.on("close", () => {
+    if (!finished) abort.abort();
+  });
+
+  try {
+    const latency = pingStats(server.host);
+    const download = await runIperfDirection(binary.path, server, true, abort.signal);
+    const upload = await runIperfDirection(binary.path, server, false, abort.signal);
+    const result = {
+      ping: Number(latency.ping.toFixed(1)),
+      jitter: Number(latency.jitter.toFixed(1)),
+      download: Number(download.mbps.toFixed(1)),
+      upload: Number(upload.mbps.toFixed(1)),
+      loadedLatency: Number(latency.ping.toFixed(1)),
+      bufferbloat: "n/a",
+    };
+    finished = true;
+    response.writeHead(200, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ result, server, port: download.port === upload.port ? download.port : `${download.port}/${upload.port}` }));
+  } catch (error) {
+    finished = true;
+    response.writeHead(502, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ error: error instanceof Error ? error.message : "The iPerf3 test failed." }));
+  }
+  return true;
+}
+
 const server = http.createServer((request, response) => {
   const origin = request.headers.origin || "";
   const headers = corsHeaders(origin);
@@ -336,6 +578,14 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (url.pathname === "/speed-test" && handleSpeedTest(request, response, headers, url)) return;
+  if (url.pathname.startsWith("/iperf3/")) {
+    void handleIperf3(request, response, headers, url).then((handled) => {
+      if (handled || response.headersSent) return;
+      response.writeHead(404, { "Content-Type": "application/json", ...headers });
+      response.end(JSON.stringify({ error: "Not found" }));
+    });
+    return;
+  }
   if (request.method !== "GET" || url.pathname !== "/telemetry") {
     response.writeHead(404, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify({ error: "Not found" }));

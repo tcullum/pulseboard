@@ -29,10 +29,14 @@ type SpeedResult = { ping: number; jitter: number; download: number; upload: num
 type SpeedMeta = { clientIp: string; service: string; location: string; country?: string };
 type SpeedHistoryItem = SpeedResult & { timestamp: string };
 type SpeedUnit = "Mbps" | "MB/s";
-type SpeedServerChoice = "auto" | "mac" | "custom";
+type SpeedServerChoice = "auto" | "mac" | "custom" | "iperf3";
+type Iperf3Server = { id: string; city: string; country: string; provider: string; host: string; ports: number[]; capacity: string };
+type Iperf3Status = { available: boolean; version: string; servers: Iperf3Server[]; error?: string };
 
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const LOCAL_SPEED_TEST_URL = "http://127.0.0.1:4319/speed-test";
+const IPERF3_SERVERS_URL = "http://127.0.0.1:4319/iperf3/servers";
+const IPERF3_TEST_URL = "http://127.0.0.1:4319/iperf3/test";
 const SPEED_PHASE_MS = 12_000;
 const SPEED_RAMP_UP_MS = 2_000;
 // If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
@@ -42,7 +46,54 @@ const SPEED_WINDOW_MS = 750;
 const SPEED_SCALE_MAX_MBPS = 3000;
 const SPEED_ARC_START = -126;
 const SPEED_ARC_SWEEP = 252;
+const IPERF3_DEFAULT_SERVER_ID = "us-los-angeles-leaseweb-26";
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
+const FALLBACK_IPERF3_SERVERS: Iperf3Server[] = [
+  { id: "ca-montreal-leaseweb-0", city: "Montreal", country: "CA", provider: "LeaseWeb", host: "speedtest.mtl2.ca.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "ca-montreal-telus-1", city: "Montreal", country: "CA", provider: "TELUS", host: "speedtest.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "10" },
+  { id: "ca-montreal-goco-2", city: "Montréal", country: "CA", provider: "goco", host: "as21723.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "—" },
+  { id: "ca-ottawa-fortisase-3", city: "Ottawa", country: "CA", provider: "FortiSASE", host: "173.243.131.29", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-toronto-datapacket-4", city: "Toronto", country: "CA", provider: "DATAPACKET", host: "138.199.57.129", ports: [5201], capacity: "2x10" },
+  { id: "ca-toronto-fortisase-5", city: "Toronto", country: "CA", provider: "FortiSASE", host: "96.45.43.6", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-vancouver-fortisase-6", city: "Vancouver", country: "CA", provider: "FortiSASE", host: "66.35.30.9", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "ca-victoria-couch-ca-7", city: "Victoria", country: "CA", provider: "couch.ca", host: "speed.couch.ca", ports: [15201, 15202, 15203, 15204], capacity: "1" },
+  { id: "ca-woodstock-xplore-8", city: "Woodstock", country: "CA", provider: "Xplore", host: "yyc-speedtest.xplore.ca", ports: [8070, 8071, 8072, 8073], capacity: "—" },
+  { id: "us-ashburn-clouvider-9", city: "Ashburn", country: "US", provider: "Clouvider", host: "ash.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-ashburn-datapacket-10", city: "Ashburn", country: "US", provider: "DATAPACKET", host: "37.19.206.20", ports: [5201], capacity: "2x10" },
+  { id: "us-ashburn-fortisase-11", city: "Ashburn", country: "US", provider: "FortiSASE", host: "66.35.22.79", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-atlanta-clouvider-12", city: "Atlanta", country: "US", provider: "Clouvider", host: "atl.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-atlanta-datapacket-13", city: "Atlanta", country: "US", provider: "DATAPACKET", host: "185.152.66.67", ports: [5201], capacity: "2x10" },
+  { id: "us-boston-datapacket-14", city: "Boston", country: "US", provider: "DATAPACKET", host: "109.61.86.65", ports: [5201], capacity: "2x10" },
+  { id: "us-chicago-leaseweb-15", city: "Chicago", country: "US", provider: "LeaseWeb", host: "speedtest.chi11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-chicago-datapacket-16", city: "Chicago", country: "US", provider: "DATAPACKET", host: "185.93.1.65", ports: [5201], capacity: "2x10" },
+  { id: "us-chicago-clouvider-17", city: "Chicago", country: "US", provider: "Clouvider", host: "chi.speedtest.clouvider.net", ports: [5202, 5203, 5204, 5205], capacity: "10" },
+  { id: "us-dallas-leaseweb-18", city: "Dallas", country: "US", provider: "LeaseWeb", host: "speedtest.dal13.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-dallas-clouvider-19", city: "Dallas", country: "US", provider: "Clouvider", host: "dal.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-dallas-datapacket-20", city: "Dallas", country: "US", provider: "DATAPACKET", host: "89.187.164.1", ports: [5201], capacity: "2x10" },
+  { id: "us-dallas-interserver-net-21", city: "Dallas", country: "US", provider: "InterServer.net", host: "dfw.speedtest.is.cc", ports: [5203, 5204, 5205, 5206], capacity: "100" },
+  { id: "us-dallas-fortisase-22", city: "Dallas", country: "US", provider: "FortiSASE", host: "66.35.27.207", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-houston-datapacket-23", city: "Houston", country: "US", provider: "DATAPACKET", host: "37.19.216.1", ports: [5201], capacity: "2x10" },
+  { id: "us-kansas-city-nocix-24", city: "Kansas City", country: "US", provider: "NOCIX", host: "speedtest.nocix.net", ports: [5201, 5202, 5203, 5204], capacity: "200" },
+  { id: "us-los-angeles-clouvider-25", city: "Los Angeles", country: "US", provider: "Clouvider", host: "la.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-los-angeles-leaseweb-26", city: "Los Angeles", country: "US", provider: "LeaseWeb", host: "speedtest.lax12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-los-angeles-datapacket-27", city: "Los Angeles", country: "US", provider: "DATAPACKET", host: "185.152.67.2", ports: [5201], capacity: "2x10" },
+  { id: "us-miami-leaseweb-28", city: "Miami", country: "US", provider: "LeaseWeb", host: "speedtest.mia11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-miami-datapacket-29", city: "Miami", country: "US", provider: "DATAPACKET", host: "195.181.162.195", ports: [5201], capacity: "2x10" },
+  { id: "us-miami-fortisase-30", city: "Miami", country: "US", provider: "FortiSASE", host: "23.249.54.234", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-new-york-hostkey-31", city: "New York", country: "US", provider: "HOSTKEY", host: "spd-uswb.hostkey.com", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-new-york-datapacket-32", city: "New York", country: "US", provider: "DATAPACKET", host: "185.59.223.8", ports: [5201], capacity: "2x10" },
+  { id: "us-new-york-city-leaseweb-33", city: "New York City", country: "US", provider: "LeaseWeb", host: "speedtest.nyc1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-phoenix-leaseweb-34", city: "Phoenix", country: "US", provider: "LeaseWeb", host: "speedtest.phx1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-phoenix-clouvider-35", city: "Phoenix", country: "US", provider: "Clouvider", host: "phx.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
+  { id: "us-plano-fortisase-36", city: "Plano", country: "US", provider: "FortiSASE", host: "209.40.123.215", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-salt-lake-xmission-37", city: "Salt Lake", country: "US", provider: "XMISSION", host: "speedtest.xmission.com", ports: [5201, 5202, 5203, 5204], capacity: "—" },
+  { id: "us-san-francisco-leaseweb-38", city: "San Francisco", country: "US", provider: "LeaseWeb", host: "speedtest.sfo12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-san-jose-fortisase-39", city: "San Jose", country: "US", provider: "FortiSASE", host: "66.35.20.123", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-san-jose-fortisase-40", city: "San Jose", country: "US", provider: "FortiSASE", host: "148.230.59.38", ports: [30001, 30002, 30003, 30004], capacity: "10" },
+  { id: "us-seattle-leaseweb-41", city: "Seattle", country: "US", provider: "LeaseWeb", host: "speedtest.sea11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+  { id: "us-seattle-datapacket-42", city: "Seattle", country: "US", provider: "DATAPACKET", host: "84.17.41.11", ports: [5201], capacity: "2x10" },
+  { id: "us-washington-leaseweb-43", city: "Washington", country: "US", provider: "LeaseWeb", host: "speedtest.wdc2.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
+];
 
 function Mark({ children }: { children: React.ReactNode }) {
   return <span className="mark" aria-hidden="true">{children}</span>;
@@ -189,6 +240,10 @@ export default function Home() {
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>("Mbps");
   const [speedServer, setSpeedServer] = useState<SpeedServerChoice>("auto");
   const [customSpeedServer, setCustomSpeedServer] = useState("");
+  const [iperf3Servers, setIperf3Servers] = useState<Iperf3Server[]>(FALLBACK_IPERF3_SERVERS);
+  const [iperf3ServerId, setIperf3ServerId] = useState(IPERF3_DEFAULT_SERVER_ID);
+  const [iperf3Status, setIperf3Status] = useState<"unchecked" | "checking" | "ready" | "missing" | "unreachable">("unchecked");
+  const [iperf3Message, setIperf3Message] = useState("Select iPerf3 to check the Mac companion.");
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
   const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
@@ -257,6 +312,84 @@ export default function Home() {
     setCurrentSpeed(0);
     setSpeedProgress(0);
     setSpeedError("");
+
+    if (speedServer === "iperf3") {
+      const selectedServer = iperf3Servers.find((server) => server.id === iperf3ServerId) ?? iperf3Servers[0];
+      if (!selectedServer) {
+        setSpeedError("No iPerf3 servers are available.");
+        speedTestController.current = null;
+        return;
+      }
+
+      setSpeedMeta({
+        clientIp: "This Mac",
+        service: `${selectedServer.city} · ${selectedServer.provider}`,
+        location: `${selectedServer.host}:${selectedServer.ports.join("/")}`,
+        country: selectedServer.country,
+      });
+
+      const phaseStarted = performance.now();
+      const phaseTimer = window.setInterval(() => {
+        const elapsed = performance.now() - phaseStarted;
+        if (elapsed < 2_500) {
+          setSpeedStage("ping");
+          setSpeedProgress(Math.min(elapsed / 2_500, 1));
+        } else if (elapsed < 12_500) {
+          setSpeedStage("download");
+          setSpeedProgress(Math.min((elapsed - 2_500) / 10_000, 1));
+        } else {
+          setSpeedStage("upload");
+          setSpeedProgress(Math.min((elapsed - 12_500) / 10_000, 1));
+        }
+      }, 250);
+
+      try {
+        setSpeedStage("ping");
+        const response = await fetch(IPERF3_TEST_URL, {
+          method: "POST",
+          cache: "no-store",
+          mode: "cors",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ serverId: selectedServer.id }),
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null) as { result?: SpeedResult; server?: Iperf3Server; port?: number | string; error?: string } | null;
+        if (!response.ok || !payload?.result) {
+          throw new Error(payload?.error || "The Mac companion could not run the iPerf3 test.");
+        }
+        const server = payload.server ?? selectedServer;
+        const result = payload.result;
+        setSpeedMeta({
+          clientIp: "This Mac",
+          service: `${server.city} · ${server.provider}`,
+          location: `${server.host}:${payload.port ?? server.ports[0]}`,
+          country: server.country,
+        });
+        setSpeedResult(result);
+        setSpeedPartial(result);
+        setCurrentSpeed(result.download);
+        setSpeedProgress(1);
+        setSpeedStage("complete");
+        setSpeedHistory((history) => {
+          const next = [{ ...result, timestamp: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }, ...history].slice(0, 20);
+          window.localStorage.setItem("pulseboard-speed-history", JSON.stringify(next));
+          return next;
+        });
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+          setSpeedStage("idle");
+          setSpeedError("iPerf3 test stopped. You can run it again whenever you’re ready.");
+        } else {
+          setSpeedStage("error");
+          setSpeedError(error instanceof Error ? error.message : "The iPerf3 test could not finish.");
+        }
+      } finally {
+        window.clearInterval(phaseTimer);
+        if (speedTestController.current === controller) speedTestController.current = null;
+      }
+      return;
+    }
+
     const speedBaseUrl = speedServer === "mac"
       ? LOCAL_SPEED_TEST_URL
       : speedServer === "custom" && customSpeedServer.trim()
@@ -475,7 +608,7 @@ export default function Home() {
       speedUploadRequests.current = [];
       if (speedTestController.current === controller) speedTestController.current = null;
     }
-  }, [customSpeedServer, speedServer]);
+  }, [customSpeedServer, iperf3ServerId, iperf3Servers, speedServer]);
 
   useEffect(() => {
     void fetchTelemetry();
@@ -532,7 +665,9 @@ export default function Home() {
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
     if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
     const savedServer = window.localStorage.getItem("pulseboard-speed-server");
-    if (savedServer === "mac" || savedServer === "custom") setSpeedServer(savedServer);
+    if (savedServer === "mac" || savedServer === "custom" || savedServer === "iperf3") setSpeedServer(savedServer);
+    const savedIperf3Server = window.localStorage.getItem("pulseboard-iperf3-server");
+    if (savedIperf3Server) setIperf3ServerId(savedIperf3Server);
     setCustomSpeedServer(window.localStorage.getItem("pulseboard-speed-custom-url") || "");
     const savedHistory = window.localStorage.getItem("pulseboard-speed-history");
     if (savedHistory) {
@@ -564,6 +699,45 @@ export default function Home() {
   useEffect(() => {
     if (customSpeedServer.trim()) window.localStorage.setItem("pulseboard-speed-custom-url", customSpeedServer.trim());
   }, [customSpeedServer]);
+
+  useEffect(() => {
+    window.localStorage.setItem("pulseboard-iperf3-server", iperf3ServerId);
+  }, [iperf3ServerId]);
+
+  useEffect(() => {
+    if (speedServer !== "iperf3") return;
+    let cancelled = false;
+    const checkingTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      setIperf3Status("checking");
+      setIperf3Message("Checking the Mac companion for native iPerf3…");
+    }, 0);
+    fetch(IPERF3_SERVERS_URL, { cache: "no-store", mode: "cors" })
+      .then(async (response) => {
+        const payload = await response.json() as Iperf3Status;
+        if (cancelled) return;
+        if (!response.ok || !payload.available) {
+          setIperf3Status("missing");
+          setIperf3Message(payload.error || "Install iperf3 on this Mac to run public server tests.");
+          if (payload.servers?.length) setIperf3Servers(payload.servers);
+          return;
+        }
+        const nextServers = payload.servers?.length ? payload.servers : FALLBACK_IPERF3_SERVERS;
+        setIperf3Status("ready");
+        setIperf3Servers(nextServers);
+        if (!nextServers.some((server) => server.id === iperf3ServerId) && nextServers[0]) setIperf3ServerId(nextServers[0].id);
+        setIperf3Message(`Ready · ${payload.version || "iperf3 detected"}`);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setIperf3Status("unreachable");
+        setIperf3Message("The iPerf3 picker works only from this Mac for now. Mobile control is not enabled.");
+      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(checkingTimer);
+    };
+  }, [iperf3ServerId, speedServer]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -600,9 +774,10 @@ export default function Home() {
   const speedProgressPercent = Math.round(speedProgress * 100);
   const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
   const speedTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
-  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "This Mac companion" : "Custom endpoint";
-  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this Mac" : "Selected by viewer location";
-  const canRunSpeedTest = speedServer !== "custom" || Boolean(customSpeedServer.trim());
+  const selectedIperf3Server = iperf3Servers.find((server) => server.id === iperf3ServerId) ?? iperf3Servers[0];
+  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "This Mac companion" : speedServer === "iperf3" ? "Public iPerf3 server" : "Custom endpoint";
+  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this Mac" : speedServer === "iperf3" && selectedIperf3Server ? `${selectedIperf3Server.city}, ${selectedIperf3Server.country} · ${selectedIperf3Server.provider}` : "Selected by viewer location";
+  const canRunSpeedTest = speedServer === "custom" ? Boolean(customSpeedServer.trim()) : speedServer === "iperf3" ? iperf3Status === "ready" : true;
   const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
   const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
     const icons = { ping: "⌾", download: "↓", upload: "↑" };
@@ -742,9 +917,26 @@ export default function Home() {
                   <select value={speedServer} onChange={(event) => setSpeedServer(event.target.value as SpeedServerChoice)} aria-label="Speed test server">
                     <option value="auto">Auto nearest edge</option>
                     <option value="mac">This Mac companion</option>
+                    <option value="iperf3">Public iPerf3 server</option>
                     <option value="custom">Custom endpoint</option>
                   </select>
                 </label>
+                {speedServer === "iperf3" && (
+                  <>
+                    <label className="speedServerSelect iperfServerSelect">
+                      <span>iPerf3</span>
+                      <select value={iperf3ServerId} onChange={(event) => setIperf3ServerId(event.target.value)} aria-label="Public iPerf3 server">
+                        <optgroup label="United States">
+                          {iperf3Servers.filter((server) => server.country === "US").map((server) => <option key={server.id} value={server.id}>{server.city} · {server.provider}</option>)}
+                        </optgroup>
+                        <optgroup label="Canada">
+                          {iperf3Servers.filter((server) => server.country === "CA").map((server) => <option key={server.id} value={server.id}>{server.city} · {server.provider}</option>)}
+                        </optgroup>
+                      </select>
+                    </label>
+                    <span className={`iperf3Status ${iperf3Status}`}>{iperf3Message}</span>
+                  </>
+                )}
                 {speedServer === "custom" && (
                   <label className="speedCustomField">
                     <input className="speedCustomInput" value={customSpeedServer} onChange={(event) => setCustomSpeedServer(event.target.value)} placeholder="server.example or https://server.example/speed-test" aria-label="Custom speed-test endpoint URL" />
@@ -788,7 +980,7 @@ export default function Home() {
                 <span>{speedServerDetail}</span>
               </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
-              <small>Runs about 25 seconds. Custom servers must expose the Pulseboard speed-test API with browser access enabled.</small>
+              <small>{speedServer === "iperf3" ? "Runs from this Mac with native iPerf3 against the selected public server. iPhone control is intentionally disabled for now." : "Runs about 25 seconds. Custom servers must expose the Pulseboard speed-test API with browser access enabled."}</small>
             </div>
             {speedHistory.length > 0 && (
               <div className="speedHistory">

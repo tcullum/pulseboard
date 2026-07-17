@@ -48,6 +48,11 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(page, /Auto nearest edge/);
   assert.match(page, /This Mac companion/);
   assert.match(page, /Custom endpoint/);
+  assert.match(page, /Public iPerf3 server/);
+  assert.match(page, /IPERF3_TEST_URL/);
+  assert.match(page, /us-los-angeles-leaseweb-26/);
+  assert.match(page, /pulseboard-iperf3-server/);
+  assert.match(page, /iPhone control is intentionally disabled/);
   assert.match(page, /LOCAL_SPEED_TEST_URL/);
   assert.match(page, /speedTestUrl/);
   assert.match(page, /normalizeSpeedBase/);
@@ -78,4 +83,10 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(companion, /Content-Encoding/);
   assert.match(companion, /request\.on\("data"/);
   assert.match(companion, /randomFillSync/);
+  assert.match(companion, /findIperf3/);
+  assert.match(companion, /\/iperf3\/servers/);
+  assert.match(companion, /\/iperf3\/test/);
+  assert.match(companion, /IPERF3_SERVERS/);
+  assert.match(companion, /spawnText/);
+  assert.match(companion, /Choose one of the allowlisted North America iPerf3 servers/);
 });
