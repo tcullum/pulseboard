@@ -9,6 +9,17 @@ const noStoreHeaders = {
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
+  if (url.searchParams.get("mode") === "meta") {
+    const forwardedIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const clientIp = request.headers.get("cf-connecting-ip") || forwardedIp || "Local device";
+    const edgeCode = request.headers.get("cf-ray")?.split("-")[1]?.toUpperCase();
+    return Response.json({
+      clientIp,
+      service: "Pulseboard edge",
+      location: edgeCode ? `${edgeCode} edge` : "Nearest service edge",
+    }, { headers: noStoreHeaders });
+  }
+
   if (url.searchParams.get("mode") === "ping") {
     return new Response("pulse", { headers: { ...noStoreHeaders, "Content-Type": "text/plain" } });
   }

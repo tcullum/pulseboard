@@ -25,7 +25,8 @@ type Telemetry = {
 };
 
 type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
-type SpeedResult = { ping: number; download: number; upload: number };
+type SpeedResult = { ping: number; jitter: number; download: number; upload: number };
+type SpeedMeta = { clientIp: string; service: string; location: string };
 
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
@@ -62,6 +63,16 @@ function median(values: number[]) {
   return sorted[Math.floor(sorted.length / 2)] || 0;
 }
 
+function jitter(values: number[]) {
+  if (values.length < 2) return 0;
+  return median(values.slice(1).map((value, index) => Math.abs(value - values[index])));
+}
+
+function gaugeAngle(mbps = 0) {
+  const normalized = Math.min(Math.max(Math.log10(Math.max(mbps, 1)) / 3, 0), 1);
+  return -126 + normalized * 252;
+}
+
 function speedQuality(download: number) {
   if (download >= 200) return "Excellent";
   if (download >= 75) return "Very good";
@@ -85,6 +96,8 @@ export default function Home() {
   const fetchInFlight = useRef<Promise<void> | null>(null);
   const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
   const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
+  const [speedPartial, setSpeedPartial] = useState<Partial<SpeedResult>>({});
+  const [speedMeta, setSpeedMeta] = useState<SpeedMeta | null>(null);
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
 
@@ -143,9 +156,19 @@ export default function Home() {
     const controller = new AbortController();
     speedTestController.current = controller;
     setSpeedResult(null);
+    setSpeedPartial({});
     setSpeedError("");
 
     try {
+      fetch(`/api/speed-test?mode=meta&nonce=${Date.now()}`, {
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: controller.signal,
+      })
+        .then((response) => response.ok ? response.json() : null)
+        .then((meta: SpeedMeta | null) => { if (meta) setSpeedMeta(meta); })
+        .catch(() => undefined);
+
       setSpeedStage("ping");
       const pingSamples: number[] = [];
       for (let index = 0; index < 5; index += 1) {
@@ -160,6 +183,8 @@ export default function Home() {
         pingSamples.push(performance.now() - started);
       }
       const ping = median(pingSamples);
+      const jitterValue = jitter(pingSamples);
+      setSpeedPartial({ ping, jitter: jitterValue });
 
       setSpeedStage("download");
       const downloadBytes = 3 * 1024 * 1024;
@@ -175,6 +200,7 @@ export default function Home() {
       }));
       const downloadSeconds = Math.max((performance.now() - downloadStarted) / 1000, 0.001);
       const download = downloads.reduce((total, bytes) => total + bytes, 0) * 8 / downloadSeconds / 1_000_000;
+      setSpeedPartial({ ping, jitter: jitterValue, download });
 
       setSpeedStage("upload");
       const uploadPayload = new Uint8Array(2 * 1024 * 1024);
@@ -197,7 +223,8 @@ export default function Home() {
       const uploadSeconds = Math.max((performance.now() - uploadStarted) / 1000, 0.001);
       const upload = uploadPayload.byteLength * 3 * 8 / uploadSeconds / 1_000_000;
 
-      setSpeedResult({ ping, download, upload });
+      setSpeedResult({ ping, jitter: jitterValue, download, upload });
+      setSpeedPartial({ ping, jitter: jitterValue, download, upload });
       setSpeedStage("complete");
     } catch (error) {
       if (controller.signal.aborted) {
@@ -298,6 +325,16 @@ export default function Home() {
   const compressedPercent = telemetry ? telemetry.memory.compressedBytes / telemetry.memory.totalBytes * 100 : 0;
   const appPercent = Math.max(0, memoryUsedPercent - wiredPercent - compressedPercent);
   const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
+  const isSpeedRunning = ["ping", "download", "upload"].includes(speedStage);
+  const speedDisplay = speedResult ?? speedPartial;
+  const primarySpeed = speedStage === "upload" && speedDisplay.upload ? speedDisplay.upload : speedDisplay.download ?? 0;
+  const gaugeValue = primarySpeed || (isSpeedRunning ? 120 : 0);
+  const gaugeLabel = speedStage === "ping" ? "Ping" : speedStage === "upload" ? "Upload" : "Download";
+  const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
+  const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
+    const icons = { ping: "⌾", download: "↓", upload: "↑" };
+    return <span key={stage} className={`${speedStage === stage ? "active" : ""} ${stageOrder > index ? "done" : ""}`}>{icons[stage]}</span>;
+  };
 
   return (
     <main className={`shell ${theme === "day" ? "themeDay" : ""}`}>
@@ -417,36 +454,48 @@ export default function Home() {
           </section>
 
           <section className="speedTool card scrollTarget" id="tools" aria-labelledby="speed-test-title">
-            <div className="speedIntro">
-              <p className="eyebrow">TOOLS · INTERNET</p>
-              <h2 id="speed-test-title">Connection speed test</h2>
-              <p>Measure the connection on this device to Pulseboard&apos;s nearest service edge.</p>
-              <div className="speedSteps" aria-label="Test stages">
-                {(["ping", "download", "upload"] as const).map((stage, index) => {
-                  const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
-                  return <span key={stage} className={`${speedStage === stage ? "active" : ""} ${stageOrder > index ? "done" : ""}`}><i>{stageOrder > index ? "✓" : index + 1}</i>{stage}</span>;
-                })}
+            <div className="speedHeader">
+              <div>
+                <p className="eyebrow">TOOLS · INTERNET</p>
+                <h2 id="speed-test-title">Connection speed test</h2>
               </div>
-              <button className={`speedAction ${["ping", "download", "upload"].includes(speedStage) ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
-                {["ping", "download", "upload"].includes(speedStage) ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
+              <div className="speedBrand"><span />PULSEBOARD SPEED</div>
+            </div>
+
+            <div className={`speedDial ${isSpeedRunning ? "testing" : ""}`} style={{ "--needle-angle": `${gaugeAngle(gaugeValue)}deg` } as React.CSSProperties}>
+              <div className="dialArc" />
+              {[["0", "zero"], ["10", "ten"], ["50", "fifty"], ["100", "hundred"], ["200", "twoHundred"], ["300", "threeHundred"], ["500", "fiveHundred"], ["750", "sevenFifty"], ["1g", "gig"]].map(([label, position]) => <span key={position} className={`dialTick ${position}`}>{label}</span>)}
+              <div className="dialNeedle" />
+              <div className="dialReadout">
+                <b>{primarySpeed ? primarySpeed.toFixed(1) : "—"}</b>
+                <span>Mbps</span>
+              </div>
+            </div>
+
+            <div className="speedMetricPanel" aria-live="polite">
+              <div className="speedMetric compact"><i>↔</i><span>Ping</span><b>{speedDisplay.ping ? speedDisplay.ping.toFixed(0) : "—"}</b><small>ms</small></div>
+              <div className="speedMetric featured"><i>↓</i><span>Download</span><b>{speedDisplay.download ? speedDisplay.download.toFixed(1) : "—"}</b><small>Mbps</small><em /></div>
+              <div className="speedMetric compact"><i>≈</i><span>Jitter</span><b>{speedDisplay.jitter ? speedDisplay.jitter.toFixed(0) : "—"}</b><small>ms</small></div>
+              <div className="speedMetric"><i>↑</i><span>Upload</span><b>{speedDisplay.upload ? speedDisplay.upload.toFixed(1) : "—"}</b><small>Mbps</small></div>
+            </div>
+
+            <div className="speedBottom">
+              <div className="speedEndpoint">
+                <b>{speedMeta?.clientIp || "This device"}</b>
+                <span>{speedResult ? speedQuality(speedResult.download) : isSpeedRunning ? `${gaugeLabel} in progress` : "Ready"}</span>
+              </div>
+              <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
+                {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
               </button>
+              <div className="speedPhases" aria-label="Test stages">
+                {(["ping", "download", "upload"] as const).map((stage, index) => phaseIcon(stage, index))}
+              </div>
+              <div className="speedEndpoint right">
+                <b>{speedMeta?.service || "Pulseboard edge"}</b>
+                <span>{speedMeta?.location || "Nearest service edge"}</span>
+              </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
               <small>Uses about 15 MB per complete test. Results reflect the device currently viewing Pulseboard.</small>
-            </div>
-
-            <div className={`speedGauge ${["ping", "download", "upload"].includes(speedStage) ? "testing" : ""}`} style={{ "--speed-progress": `${Math.min(((speedResult?.download || 0) / 500) * 75, 75)}%` } as React.CSSProperties}>
-              <div className="gaugeOrbit"><i /><i /><i /></div>
-              <div className="gaugeCore">
-                <span>{speedStage === "ping" ? "Checking latency" : speedStage === "download" ? "Measuring download" : speedStage === "upload" ? "Measuring upload" : speedResult ? speedQuality(speedResult.download) : "Ready to test"}</span>
-                <b>{speedResult ? speedResult.download.toFixed(1) : "—"}</b>
-                <small>Mbps download</small>
-              </div>
-            </div>
-
-            <div className="speedResults" aria-live="polite">
-              <div><span>Latency</span><b>{speedResult ? speedResult.ping.toFixed(0) : "—"}<small> ms</small></b><i className="latencyIcon">↔</i></div>
-              <div><span>Download</span><b>{speedResult ? speedResult.download.toFixed(1) : "—"}<small> Mbps</small></b><i className="downloadIcon">↓</i></div>
-              <div><span>Upload</span><b>{speedResult ? speedResult.upload.toFixed(1) : "—"}<small> Mbps</small></b><i className="uploadIcon">↑</i></div>
             </div>
           </section>
           <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for your Mac"}</span></footer>
