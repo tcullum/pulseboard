@@ -50,6 +50,10 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(page, /Custom endpoint/);
   assert.match(page, /LOCAL_SPEED_TEST_URL/);
   assert.match(page, /speedTestUrl/);
+  assert.match(page, /normalizeSpeedBase/);
+  assert.match(page, /speedServerHelp/);
+  assert.match(page, /HTTPS and CORS enabled/);
+  assert.match(page, /server\.example or https:\/\/server\.example\/speed-test/);
   assert.match(page, /pulseboard-speed-unit/);
   assert.match(page, /pulseboard-speed-custom-url/);
   assert.match(page, /speedMeta/);

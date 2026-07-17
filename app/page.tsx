@@ -128,7 +128,27 @@ function tickPosition(mbps: number) {
 }
 
 function normalizeSpeedBase(value: string) {
-  return value.trim().replace(/\/+$/, "");
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const url = new URL(withProtocol);
+    if (url.pathname === "/") url.pathname = "/speed-test";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/+$/, "");
+  } catch {
+    return withProtocol.replace(/\/+$/, "");
+  }
+}
+
+function speedServerHelp(value: string) {
+  const normalized = normalizeSpeedBase(value);
+  if (!normalized) return "Enter a compatible endpoint URL.";
+  if (/^http:\/\//i.test(normalized) && !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(normalized)) {
+    return "Public custom servers must use HTTPS from this dashboard.";
+  }
+  return normalized;
 }
 
 function speedTestUrl(baseUrl: string, mode: string, params: Record<string, string | number> = {}) {
@@ -243,6 +263,7 @@ export default function Home() {
         ? normalizeSpeedBase(customSpeedServer)
         : "/api/speed-test";
     const serverName = speedServer === "mac" ? "This Mac companion" : speedServer === "custom" ? "Custom server" : "Pulseboard edge";
+    const customFailureMessage = "Custom server is unreachable or does not expose the Pulseboard speed-test API with HTTPS and CORS enabled.";
     setSpeedMeta({
       clientIp: speedServer === "mac" ? "This browser" : speedServer === "custom" ? "This device" : "This device",
       service: serverName,
@@ -263,12 +284,17 @@ export default function Home() {
       const pingSamples: number[] = [];
       const pingOnce = async () => {
         const started = performance.now();
-        const response = await fetch(speedTestUrl(speedBaseUrl, "ping"), {
-          cache: "no-store",
-          credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`${serverName} did not respond.`);
+        let response: Response;
+        try {
+          response = await fetch(speedTestUrl(speedBaseUrl, "ping"), {
+            cache: "no-store",
+            credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
+            signal: controller.signal,
+          });
+        } catch {
+          throw new Error(speedServer === "custom" ? customFailureMessage : `${serverName} did not respond.`);
+        }
+        if (!response.ok) throw new Error(speedServer === "custom" ? customFailureMessage : `${serverName} did not respond.`);
         await response.text();
         return performance.now() - started;
       };
@@ -339,12 +365,17 @@ export default function Home() {
         let size = 4 * 1024 * 1024;
         while (performance.now() < until && !controller.signal.aborted) {
           const requestStarted = performance.now();
-          const response = await fetch(speedTestUrl(speedBaseUrl, "download", { size, stream }), {
-            cache: "no-store",
-            credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
-            signal: controller.signal,
-          });
-          if (!response.ok) throw new Error(`The download test to ${serverName} could not finish.`);
+          let response: Response;
+          try {
+            response = await fetch(speedTestUrl(speedBaseUrl, "download", { size, stream }), {
+              cache: "no-store",
+              credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
+              signal: controller.signal,
+            });
+          } catch {
+            throw new Error(speedServer === "custom" ? customFailureMessage : `The download test to ${serverName} could not finish.`);
+          }
+          if (!response.ok) throw new Error(speedServer === "custom" ? customFailureMessage : `The download test to ${serverName} could not finish.`);
 
           if (!response.body) {
             onBytes((await response.arrayBuffer()).byteLength);
@@ -399,12 +430,12 @@ export default function Home() {
               controller.signal.removeEventListener("abort", abort);
               speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
               if (request.status >= 200 && request.status < 300) resolve();
-              else reject(new Error(request.status === 413 ? "The upload sample was rejected by the server size limit." : `The upload test to ${serverName} could not finish.`));
+              else reject(new Error(request.status === 413 ? "The upload sample was rejected by the server size limit." : speedServer === "custom" ? customFailureMessage : `The upload test to ${serverName} could not finish.`));
             };
             request.onerror = () => {
               controller.signal.removeEventListener("abort", abort);
               speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
-              reject(new Error("The upload endpoint could not be reached."));
+              reject(new Error(speedServer === "custom" ? customFailureMessage : "The upload endpoint could not be reached."));
             };
             request.onabort = () => {
               controller.signal.removeEventListener("abort", abort);
@@ -715,7 +746,10 @@ export default function Home() {
                   </select>
                 </label>
                 {speedServer === "custom" && (
-                  <input className="speedCustomInput" value={customSpeedServer} onChange={(event) => setCustomSpeedServer(event.target.value)} placeholder="https://server.example/speed-test" aria-label="Custom speed-test endpoint URL" />
+                  <label className="speedCustomField">
+                    <input className="speedCustomInput" value={customSpeedServer} onChange={(event) => setCustomSpeedServer(event.target.value)} placeholder="server.example or https://server.example/speed-test" aria-label="Custom speed-test endpoint URL" />
+                    <span>{speedServerHelp(customSpeedServer)}</span>
+                  </label>
                 )}
                 <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} disabled={!canRunSpeedTest && !isSpeedRunning} onClick={() => void runSpeedTest()}>
                   {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
