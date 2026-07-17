@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type ProcessItem = {
   name: string;
@@ -67,41 +67,52 @@ export default function Home() {
   const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
   const [theme, setTheme] = useState<"night" | "day">("night");
+  const fetchInFlight = useRef<Promise<void> | null>(null);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
     document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
-  const fetchTelemetry = useCallback(async () => {
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 1000);
-    try {
-      const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
-      if (!response.ok) throw new Error("Companion unavailable");
-      const next = await response.json() as Telemetry;
-      setTelemetry(next);
-      setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
-      setStatus("live");
-      setTransport("direct");
-      setRelayAgeSeconds(0);
-    } catch {
+  const fetchTelemetry = useCallback(() => {
+    if (fetchInFlight.current) return fetchInFlight.current;
+
+    const request = (async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 1000);
       try {
-        const relayResponse = await fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" });
-        if (!relayResponse.ok) throw new Error("Relay unavailable");
-        const relay = await relayResponse.json() as { telemetry: Telemetry; ageSeconds: number; stale: boolean };
-        setTelemetry(relay.telemetry);
-        setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
+        const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
+        if (!response.ok) throw new Error("Companion unavailable");
+        const next = await response.json() as Telemetry;
+        setTelemetry(next);
+        setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
         setStatus("live");
-        setTransport("relay");
-        setRelayAgeSeconds(relay.ageSeconds);
+        setTransport("direct");
+        setRelayAgeSeconds(0);
       } catch {
-        setStatus("offline");
-        setTransport(null);
+        try {
+          const relayResponse = await fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" });
+          if (!relayResponse.ok) throw new Error("Relay unavailable");
+          const relay = await relayResponse.json() as { telemetry: Telemetry; ageSeconds: number; stale: boolean };
+          setTelemetry(relay.telemetry);
+          setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
+          setStatus("live");
+          setTransport("relay");
+          setRelayAgeSeconds(relay.ageSeconds);
+        } catch {
+          setStatus("offline");
+          setTransport(null);
+        }
+      } finally {
+        window.clearTimeout(timeout);
       }
-    } finally {
-      window.clearTimeout(timeout);
-    }
+    })();
+
+    fetchInFlight.current = request;
+    void request.finally(() => {
+      if (fetchInFlight.current === request) fetchInFlight.current = null;
+    });
+    return request;
   }, []);
 
   useEffect(() => {
@@ -112,7 +123,49 @@ export default function Home() {
   }, [fetchTelemetry, paused, refreshInterval]);
 
   useEffect(() => {
+    const recoverMissingStyles = () => {
+      const stylesReady = window.getComputedStyle(document.documentElement).getPropertyValue("--pulseboard-ready").trim() === "1";
+      if (stylesReady) return false;
+
+      const lastRecovery = Number(window.sessionStorage.getItem("pulseboard-style-recovery") || 0);
+      if (Date.now() - lastRecovery < 30_000) return false;
+
+      window.sessionStorage.setItem("pulseboard-style-recovery", String(Date.now()));
+      const recoveryUrl = new URL(window.location.href);
+      recoveryUrl.searchParams.set("pb-recover", String(Date.now()));
+      window.location.replace(recoveryUrl.toString());
+      return true;
+    };
+
+    const resume = () => {
+      if (document.visibilityState !== "visible" || recoverMissingStyles()) return;
+      setStatus((current) => current === "offline" ? "connecting" : current);
+      void fetchTelemetry();
+    };
+    const handlePageShow = () => resume();
+    const handleVisibility = () => resume();
+    const handleOnline = () => resume();
+    const handleOffline = () => {
+      setStatus("offline");
+      setTransport(null);
+    };
+
+    window.addEventListener("pageshow", handlePageShow);
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [fetchTelemetry]);
+
+  useEffect(() => {
     const saved = Number(window.localStorage.getItem("pulseboard-refresh"));
+    // Browser preferences are intentionally restored after hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
   }, []);

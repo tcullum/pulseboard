@@ -1,5 +1,7 @@
 @import "tailwindcss";
 
+html { --pulseboard-ready: 1; }
+
 :root { --bg:#07111f; --rail:#091625; --panel:#0d1b2a; --panel-2:#102236; --line:#20364b; --text:#eef6ff; --muted:#7e98ad; --cyan:#39d9e6; --green:#5ee6a8; --amber:#f4b85a; --violet:#8799ff; }
 * { box-sizing:border-box; }
 html { background:var(--bg); scroll-behavior:smooth; }
