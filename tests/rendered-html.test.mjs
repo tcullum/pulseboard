@@ -29,3 +29,18 @@ test("detects missing styles and prevents stale application shells", async () =>
   assert.match(worker, /contentType\.includes\("text\/html"\)/);
   assert.match(worker, /no-cache, no-store, max-age=0, must-revalidate/);
 });
+
+test("includes a real, cancellable connection speed test", async () => {
+  const [page, route] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/api/speed-test/route.ts", root), "utf8"),
+  ]);
+
+  assert.match(page, /id="tools"/);
+  assert.match(page, /Connection speed test/);
+  assert.match(page, /speedTestController\.current\.abort/);
+  assert.match(page, /performance\.now\(\)/);
+  assert.match(route, /export async function GET/);
+  assert.match(route, /export async function POST/);
+  assert.match(route, /crypto\.getRandomValues/);
+});

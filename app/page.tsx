@@ -24,6 +24,9 @@ type Telemetry = {
   processes: { total: number; running: number; items: ProcessItem[] };
 };
 
+type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
+type SpeedResult = { ping: number; download: number; upload: number };
+
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
 
@@ -54,6 +57,18 @@ function remaining(minutes: number | null) {
   return hours ? `${hours}h ${mins}m remaining` : `${mins} min remaining`;
 }
 
+function median(values: number[]) {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)] || 0;
+}
+
+function speedQuality(download: number) {
+  if (download >= 200) return "Excellent";
+  if (download >= 75) return "Very good";
+  if (download >= 25) return "Good";
+  return "Limited";
+}
+
 export default function Home() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
@@ -68,6 +83,10 @@ export default function Home() {
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
   const [theme, setTheme] = useState<"night" | "day">("night");
   const fetchInFlight = useRef<Promise<void> | null>(null);
+  const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
+  const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
+  const [speedError, setSpeedError] = useState("");
+  const speedTestController = useRef<AbortController | null>(null);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
@@ -113,6 +132,84 @@ export default function Home() {
       if (fetchInFlight.current === request) fetchInFlight.current = null;
     });
     return request;
+  }, []);
+
+  const runSpeedTest = useCallback(async () => {
+    if (speedTestController.current) {
+      speedTestController.current.abort();
+      return;
+    }
+
+    const controller = new AbortController();
+    speedTestController.current = controller;
+    setSpeedResult(null);
+    setSpeedError("");
+
+    try {
+      setSpeedStage("ping");
+      const pingSamples: number[] = [];
+      for (let index = 0; index < 5; index += 1) {
+        const started = performance.now();
+        const response = await fetch(`/api/speed-test?mode=ping&nonce=${Date.now()}-${index}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("The test server did not respond.");
+        await response.text();
+        pingSamples.push(performance.now() - started);
+      }
+      const ping = median(pingSamples);
+
+      setSpeedStage("download");
+      const downloadBytes = 3 * 1024 * 1024;
+      const downloadStarted = performance.now();
+      const downloads = await Promise.all([0, 1, 2].map(async (stream) => {
+        const response = await fetch(`/api/speed-test?mode=download&size=${downloadBytes}&stream=${stream}&nonce=${Date.now()}`, {
+          cache: "no-store",
+          credentials: "same-origin",
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("The download test could not finish.");
+        return (await response.arrayBuffer()).byteLength;
+      }));
+      const downloadSeconds = Math.max((performance.now() - downloadStarted) / 1000, 0.001);
+      const download = downloads.reduce((total, bytes) => total + bytes, 0) * 8 / downloadSeconds / 1_000_000;
+
+      setSpeedStage("upload");
+      const uploadPayload = new Uint8Array(2 * 1024 * 1024);
+      for (let offset = 0; offset < uploadPayload.length; offset += 65_536) {
+        crypto.getRandomValues(uploadPayload.subarray(offset, Math.min(offset + 65_536, uploadPayload.length)));
+      }
+      const uploadStarted = performance.now();
+      await Promise.all([0, 1, 2].map(async (stream) => {
+        const response = await fetch(`/api/speed-test?mode=upload&stream=${stream}&nonce=${Date.now()}`, {
+          method: "POST",
+          body: uploadPayload,
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/octet-stream" },
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error("The upload test could not finish.");
+        await response.json();
+      }));
+      const uploadSeconds = Math.max((performance.now() - uploadStarted) / 1000, 0.001);
+      const upload = uploadPayload.byteLength * 3 * 8 / uploadSeconds / 1_000_000;
+
+      setSpeedResult({ ping, download, upload });
+      setSpeedStage("complete");
+    } catch (error) {
+      if (controller.signal.aborted) {
+        setSpeedStage("idle");
+        setSpeedError("Test stopped. You can run it again whenever you’re ready.");
+      } else {
+        setSpeedStage("error");
+        setSpeedError(error instanceof Error ? error.message : "The speed test could not finish.");
+      }
+    } finally {
+      if (speedTestController.current === controller) speedTestController.current = null;
+    }
   }, []);
 
   useEffect(() => {
@@ -212,6 +309,7 @@ export default function Home() {
           <button className={`railButton ${activeView === "storage" && !settingsOpen ? "active" : ""}`} aria-label="Storage" aria-current={activeView === "storage" ? "page" : undefined} onClick={() => navigateTo("storage")}><Mark>◫</Mark><span>Storage</span></button>
           <button className={`railButton ${activeView === "network" && !settingsOpen ? "active" : ""}`} aria-label="Network" aria-current={activeView === "network" ? "page" : undefined} onClick={() => navigateTo("network")}><Mark>↗</Mark><span>Network</span></button>
           <button className={`railButton ${activeView === "processes" && !settingsOpen ? "active" : ""}`} aria-label="Processes" aria-current={activeView === "processes" ? "page" : undefined} onClick={() => navigateTo("processes")}><Mark>≡</Mark><span>Processes</span></button>
+          <button className={`railButton ${activeView === "tools" && !settingsOpen ? "active" : ""}`} aria-label="Tools" aria-current={activeView === "tools" ? "page" : undefined} onClick={() => navigateTo("tools")}><Mark>⌁</Mark><span>Tools</span></button>
         </nav>
         <div className="railBottom">
           <button className={`railButton ${settingsOpen ? "active" : ""}`} aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}><Mark>⚙</Mark><span>Settings</span></button>
@@ -316,6 +414,40 @@ export default function Home() {
             <div><p className="label">LIVE CPU HISTORY</p><h2>Resource activity</h2></div>
             <div className="historyBars" aria-hidden="true">{cpuHistory.map((height, index) => <i key={index} style={{ height: `${Math.max(2, height)}%` }} />)}</div>
             <div className="rangeControl">{(["1H", "6H", "24H"] as const).map((item) => <button key={item} className={range === item ? "selected" : ""} onClick={() => setRange(item)}>{item}</button>)}</div>
+          </section>
+
+          <section className="speedTool card scrollTarget" id="tools" aria-labelledby="speed-test-title">
+            <div className="speedIntro">
+              <p className="eyebrow">TOOLS · INTERNET</p>
+              <h2 id="speed-test-title">Connection speed test</h2>
+              <p>Measure the connection on this device to Pulseboard&apos;s nearest service edge.</p>
+              <div className="speedSteps" aria-label="Test stages">
+                {(["ping", "download", "upload"] as const).map((stage, index) => {
+                  const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
+                  return <span key={stage} className={`${speedStage === stage ? "active" : ""} ${stageOrder > index ? "done" : ""}`}><i>{stageOrder > index ? "✓" : index + 1}</i>{stage}</span>;
+                })}
+              </div>
+              <button className={`speedAction ${["ping", "download", "upload"].includes(speedStage) ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
+                {["ping", "download", "upload"].includes(speedStage) ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
+              </button>
+              {speedError && <p className="speedError" role="status">{speedError}</p>}
+              <small>Uses about 15 MB per complete test. Results reflect the device currently viewing Pulseboard.</small>
+            </div>
+
+            <div className={`speedGauge ${["ping", "download", "upload"].includes(speedStage) ? "testing" : ""}`} style={{ "--speed-progress": `${Math.min(((speedResult?.download || 0) / 500) * 75, 75)}%` } as React.CSSProperties}>
+              <div className="gaugeOrbit"><i /><i /><i /></div>
+              <div className="gaugeCore">
+                <span>{speedStage === "ping" ? "Checking latency" : speedStage === "download" ? "Measuring download" : speedStage === "upload" ? "Measuring upload" : speedResult ? speedQuality(speedResult.download) : "Ready to test"}</span>
+                <b>{speedResult ? speedResult.download.toFixed(1) : "—"}</b>
+                <small>Mbps download</small>
+              </div>
+            </div>
+
+            <div className="speedResults" aria-live="polite">
+              <div><span>Latency</span><b>{speedResult ? speedResult.ping.toFixed(0) : "—"}<small> ms</small></b><i className="latencyIcon">↔</i></div>
+              <div><span>Download</span><b>{speedResult ? speedResult.download.toFixed(1) : "—"}<small> Mbps</small></b><i className="downloadIcon">↓</i></div>
+              <div><span>Upload</span><b>{speedResult ? speedResult.upload.toFixed(1) : "—"}<small> Mbps</small></b><i className="uploadIcon">↑</i></div>
+            </div>
           </section>
           <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for your Mac"}</span></footer>
         </div>
