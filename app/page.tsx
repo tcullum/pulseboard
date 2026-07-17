@@ -25,10 +25,17 @@ type Telemetry = {
 };
 
 type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
-type SpeedResult = { ping: number; jitter: number; download: number; upload: number };
+type SpeedResult = { ping: number; jitter: number; download: number; upload: number; loadedLatency: number; bufferbloat: string };
 type SpeedMeta = { clientIp: string; service: string; location: string };
+type SpeedHistoryItem = SpeedResult & { timestamp: string };
 
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
+const SPEED_PHASE_MS = 12_000;
+const SPEED_RAMP_UP_MS = 2_000;
+// If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
+// For strict multi-connection testing, terminate this route with HTTP/1.1 at the proxy.
+const SPEED_STREAMS = 6;
+const SPEED_WINDOW_MS = 750;
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
 
 function Mark({ children }: { children: React.ReactNode }) {
@@ -63,9 +70,28 @@ function median(values: number[]) {
   return sorted[Math.floor(sorted.length / 2)] || 0;
 }
 
+function average(values: number[]) {
+  return values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
+}
+
 function jitter(values: number[]) {
   if (values.length < 2) return 0;
-  return median(values.slice(1).map((value, index) => Math.abs(value - values[index])));
+  return average(values.slice(1).map((value, index) => Math.abs(value - values[index])));
+}
+
+function trimmedMean(values: number[]) {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const trim = Math.floor(sorted.length * 0.1);
+  const stable = sorted.slice(trim, sorted.length - trim || sorted.length);
+  return average(stable.length ? stable : sorted);
+}
+
+function bufferbloatGrade(delta: number) {
+  if (delta < 30) return "A";
+  if (delta < 100) return "B";
+  if (delta < 250) return "C";
+  return "D";
 }
 
 function gaugeAngle(mbps = 0) {
@@ -98,8 +124,12 @@ export default function Home() {
   const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
   const [speedPartial, setSpeedPartial] = useState<Partial<SpeedResult>>({});
   const [speedMeta, setSpeedMeta] = useState<SpeedMeta | null>(null);
+  const [speedHistory, setSpeedHistory] = useState<SpeedHistoryItem[]>([]);
+  const [currentSpeed, setCurrentSpeed] = useState(0);
+  const [speedProgress, setSpeedProgress] = useState(0);
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
+  const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
@@ -150,6 +180,7 @@ export default function Home() {
   const runSpeedTest = useCallback(async () => {
     if (speedTestController.current) {
       speedTestController.current.abort();
+      speedUploadRequests.current.forEach((request) => request.abort());
       return;
     }
 
@@ -157,6 +188,8 @@ export default function Home() {
     speedTestController.current = controller;
     setSpeedResult(null);
     setSpeedPartial({});
+    setCurrentSpeed(0);
+    setSpeedProgress(0);
     setSpeedError("");
 
     try {
@@ -171,63 +204,179 @@ export default function Home() {
 
       setSpeedStage("ping");
       const pingSamples: number[] = [];
-      for (let index = 0; index < 5; index += 1) {
+      const pingOnce = async () => {
         const started = performance.now();
-        const response = await fetch(`/api/speed-test?mode=ping&nonce=${Date.now()}-${index}`, {
+        const response = await fetch(`/api/speed-test?mode=ping&nonce=${Date.now()}-${Math.random()}`, {
           cache: "no-store",
           credentials: "same-origin",
           signal: controller.signal,
         });
         if (!response.ok) throw new Error("The test server did not respond.");
         await response.text();
-        pingSamples.push(performance.now() - started);
+        return performance.now() - started;
+      };
+
+      for (let index = 0; index < 10; index += 1) {
+        pingSamples.push(await pingOnce());
       }
-      const ping = median(pingSamples);
-      const jitterValue = jitter(pingSamples);
+      const stablePingSamples = pingSamples.slice(1);
+      const ping = Math.min(...stablePingSamples);
+      const jitterValue = jitter(stablePingSamples);
       setSpeedPartial({ ping, jitter: jitterValue });
 
+      const loadedSamples: number[] = [];
+      const startLoadedLatency = () => {
+        let stopped = false;
+        const loop = async () => {
+          while (!stopped && !controller.signal.aborted) {
+            try {
+              loadedSamples.push(await pingOnce());
+            } catch {
+              if (!controller.signal.aborted) loadedSamples.push(ping + 500);
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 500));
+          }
+        };
+        void loop();
+        return () => { stopped = true; };
+      };
+
+      const runTransferPhase = async (stage: "download" | "upload", worker: (stream: number, until: number, onBytes: (bytes: number) => void) => Promise<void>) => {
+        setSpeedStage(stage);
+        setCurrentSpeed(0);
+        setSpeedProgress(0);
+        const phaseStarted = performance.now();
+        const phaseEnds = phaseStarted + SPEED_PHASE_MS;
+        const byteEvents: Array<{ time: number; bytes: number }> = [];
+        const stableSamples: number[] = [];
+        const stopLoadedLatency = startLoadedLatency();
+
+        const sample = () => {
+          const now = performance.now();
+          const windowStart = now - SPEED_WINDOW_MS;
+          while (byteEvents.length && byteEvents[0].time < windowStart - 250) byteEvents.shift();
+          const windowBytes = byteEvents.filter((event) => event.time >= windowStart).reduce((total, event) => total + event.bytes, 0);
+          const windowSeconds = Math.max(Math.min((now - Math.max(windowStart, phaseStarted)) / 1000, SPEED_WINDOW_MS / 1000), 0.1);
+          const mbps = windowBytes * 8 / windowSeconds / 1_000_000;
+          const progress = Math.min((now - phaseStarted) / SPEED_PHASE_MS, 1);
+          setCurrentSpeed(mbps);
+          setSpeedProgress(progress);
+          if (now - phaseStarted >= SPEED_RAMP_UP_MS && mbps > 0) stableSamples.push(mbps);
+        };
+
+        const sampler = window.setInterval(sample, 250);
+        const onBytes = (bytes: number) => byteEvents.push({ time: performance.now(), bytes });
+        try {
+          await Promise.all(Array.from({ length: SPEED_STREAMS }, (_, stream) => worker(stream, phaseEnds, onBytes)));
+          sample();
+        } finally {
+          window.clearInterval(sampler);
+          stopLoadedLatency();
+        }
+
+        return trimmedMean(stableSamples);
+      };
+
       setSpeedStage("download");
-      const downloadBytes = 3 * 1024 * 1024;
-      const downloadStarted = performance.now();
-      const downloads = await Promise.all([0, 1, 2].map(async (stream) => {
-        const response = await fetch(`/api/speed-test?mode=download&size=${downloadBytes}&stream=${stream}&nonce=${Date.now()}`, {
-          cache: "no-store",
-          credentials: "same-origin",
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error("The download test could not finish.");
-        return (await response.arrayBuffer()).byteLength;
-      }));
-      const downloadSeconds = Math.max((performance.now() - downloadStarted) / 1000, 0.001);
-      const download = downloads.reduce((total, bytes) => total + bytes, 0) * 8 / downloadSeconds / 1_000_000;
+      const download = await runTransferPhase("download", async (stream, until, onBytes) => {
+        let size = 4 * 1024 * 1024;
+        while (performance.now() < until && !controller.signal.aborted) {
+          const requestStarted = performance.now();
+          const response = await fetch(`/api/speed-test?mode=download&size=${size}&stream=${stream}&nonce=${Date.now()}`, {
+            cache: "no-store",
+            credentials: "same-origin",
+            signal: controller.signal,
+          });
+          if (!response.ok) throw new Error("The download test could not finish.");
+
+          if (!response.body) {
+            onBytes((await response.arrayBuffer()).byteLength);
+          } else {
+            const reader = response.body.getReader();
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              onBytes(value.byteLength);
+            }
+          }
+
+          if (performance.now() - requestStarted < 1_700) size = Math.min(size * 2, 32 * 1024 * 1024);
+        }
+      });
       setSpeedPartial({ ping, jitter: jitterValue, download });
 
-      setSpeedStage("upload");
-      const uploadPayload = new Uint8Array(2 * 1024 * 1024);
-      for (let offset = 0; offset < uploadPayload.length; offset += 65_536) {
-        crypto.getRandomValues(uploadPayload.subarray(offset, Math.min(offset + 65_536, uploadPayload.length)));
-      }
-      const uploadStarted = performance.now();
-      await Promise.all([0, 1, 2].map(async (stream) => {
-        const response = await fetch(`/api/speed-test?mode=upload&stream=${stream}&nonce=${Date.now()}`, {
-          method: "POST",
-          body: uploadPayload,
-          cache: "no-store",
-          credentials: "same-origin",
-          headers: { "Content-Type": "application/octet-stream" },
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error("The upload test could not finish.");
-        await response.json();
-      }));
-      const uploadSeconds = Math.max((performance.now() - uploadStarted) / 1000, 0.001);
-      const upload = uploadPayload.byteLength * 3 * 8 / uploadSeconds / 1_000_000;
+      const payloadCache = new Map<number, Uint8Array>();
+      const payloadFor = (size: number) => {
+        const cached = payloadCache.get(size);
+        if (cached) return cached;
+        const payload = new Uint8Array(size);
+        for (let offset = 0; offset < payload.length; offset += 65_536) {
+          crypto.getRandomValues(payload.subarray(offset, Math.min(offset + 65_536, payload.length)));
+        }
+        payloadCache.set(size, payload);
+        return payload;
+      };
 
-      setSpeedResult({ ping, jitter: jitterValue, download, upload });
-      setSpeedPartial({ ping, jitter: jitterValue, download, upload });
+      const upload = await runTransferPhase("upload", async (stream, until, onBytes) => {
+        let size = 4 * 1024 * 1024;
+        while (performance.now() < until && !controller.signal.aborted) {
+          const payload = payloadFor(size);
+          const requestStarted = performance.now();
+          await new Promise<void>((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            let counted = 0;
+            const abort = () => request.abort();
+            speedUploadRequests.current.push(request);
+            controller.signal.addEventListener("abort", abort, { once: true });
+            request.open("POST", `/api/speed-test?mode=upload&stream=${stream}&nonce=${Date.now()}`, true);
+            request.withCredentials = true;
+            request.setRequestHeader("Content-Type", "application/octet-stream");
+            request.upload.onprogress = (event) => {
+              const next = event.loaded || 0;
+              const delta = Math.max(next - counted, 0);
+              counted = next;
+              if (delta) onBytes(delta);
+            };
+            request.onload = () => {
+              if (counted < payload.byteLength) onBytes(payload.byteLength - counted);
+              controller.signal.removeEventListener("abort", abort);
+              speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
+              if (request.status >= 200 && request.status < 300) resolve();
+              else reject(new Error(request.status === 413 ? "The upload sample was rejected by the server size limit." : "The upload test could not finish."));
+            };
+            request.onerror = () => {
+              controller.signal.removeEventListener("abort", abort);
+              speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
+              reject(new Error("The upload endpoint could not be reached."));
+            };
+            request.onabort = () => {
+              controller.signal.removeEventListener("abort", abort);
+              speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
+              reject(new DOMException("The speed test was stopped.", "AbortError"));
+            };
+            request.send(payload);
+          });
+          if (performance.now() - requestStarted < 1_700) size = Math.min(size * 2, 32 * 1024 * 1024);
+        }
+      });
+
+      const loadedLatency = median(loadedSamples) || ping;
+      const loadedDelta = Math.max(loadedLatency - ping, 0);
+      const result = { ping, jitter: jitterValue, download, upload, loadedLatency, bufferbloat: bufferbloatGrade(loadedDelta) };
+
+      setSpeedResult(result);
+      setSpeedPartial(result);
+      setCurrentSpeed(download);
+      setSpeedProgress(1);
       setSpeedStage("complete");
+      setSpeedHistory((history) => {
+        const next = [{ ...result, timestamp: new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) }, ...history].slice(0, 20);
+        window.localStorage.setItem("pulseboard-speed-history", JSON.stringify(next));
+        return next;
+      });
     } catch (error) {
-      if (controller.signal.aborted) {
+      speedUploadRequests.current.forEach((request) => request.abort());
+      if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
         setSpeedStage("idle");
         setSpeedError("Test stopped. You can run it again whenever you’re ready.");
       } else {
@@ -235,6 +384,7 @@ export default function Home() {
         setSpeedError(error instanceof Error ? error.message : "The speed test could not finish.");
       }
     } finally {
+      speedUploadRequests.current = [];
       if (speedTestController.current === controller) speedTestController.current = null;
     }
   }, []);
@@ -292,6 +442,14 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
+    const savedHistory = window.localStorage.getItem("pulseboard-speed-history");
+    if (savedHistory) {
+      try {
+        setSpeedHistory((JSON.parse(savedHistory) as SpeedHistoryItem[]).slice(0, 20));
+      } catch {
+        window.localStorage.removeItem("pulseboard-speed-history");
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -311,6 +469,11 @@ export default function Home() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, []);
 
+  useEffect(() => () => {
+    speedTestController.current?.abort();
+    speedUploadRequests.current.forEach((request) => request.abort());
+  }, []);
+
   const processes = useMemo(() => {
     const items = telemetry?.processes.items || [];
     return [...items].sort((a, b) => sort === "cpu" ? b.cpu - a.cpu : b.memoryBytes - a.memoryBytes);
@@ -327,9 +490,11 @@ export default function Home() {
   const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
   const isSpeedRunning = ["ping", "download", "upload"].includes(speedStage);
   const speedDisplay = speedResult ?? speedPartial;
-  const primarySpeed = speedStage === "upload" && speedDisplay.upload ? speedDisplay.upload : speedDisplay.download ?? 0;
-  const gaugeValue = primarySpeed || (isSpeedRunning ? 120 : 0);
+  const primarySpeed = isSpeedRunning && speedStage !== "ping" ? currentSpeed : speedStage === "upload" && speedDisplay.upload ? speedDisplay.upload : speedDisplay.download ?? 0;
+  const gaugeValue = primarySpeed || 0;
   const gaugeLabel = speedStage === "ping" ? "Ping" : speedStage === "upload" ? "Upload" : "Download";
+  const speedProgressPercent = Math.round(speedProgress * 100);
+  const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
   const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
   const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
     const icons = { ping: "⌾", download: "↓", upload: "↑" };
@@ -458,25 +623,32 @@ export default function Home() {
               <div>
                 <p className="eyebrow">TOOLS · INTERNET</p>
                 <h2 id="speed-test-title">Connection speed test</h2>
+                <span>{isSpeedRunning ? `${gaugeLabel} phase · ${speedProgressPercent}%` : "Self-hosted test against Pulseboard edge"}</span>
               </div>
-              <div className="speedBrand"><span />PULSEBOARD SPEED</div>
+              <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
+                {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
+              </button>
             </div>
 
-            <div className={`speedDial ${isSpeedRunning ? "testing" : ""}`} style={{ "--needle-angle": `${gaugeAngle(gaugeValue)}deg` } as React.CSSProperties}>
+            <div className={`speedDial ${isSpeedRunning ? "testing" : ""}`} style={{ "--needle-angle": `${gaugeAngle(gaugeValue)}deg`, "--speed-progress": `${Math.min((gaugeValue / 500) * 75, 75)}%` } as React.CSSProperties}>
               <div className="dialArc" />
-              {[["0", "zero"], ["10", "ten"], ["50", "fifty"], ["100", "hundred"], ["200", "twoHundred"], ["300", "threeHundred"], ["500", "fiveHundred"], ["750", "sevenFifty"], ["1g", "gig"]].map(([label, position]) => <span key={position} className={`dialTick ${position}`}>{label}</span>)}
+              {[["0", "zero"], ["50", "fifty"], ["100", "hundred"], ["300", "threeHundred"], ["500", "fiveHundred"]].map(([label, position]) => <span key={position} className={`dialTick ${position}`}>{label}</span>)}
               <div className="dialNeedle" />
               <div className="dialReadout">
                 <b>{primarySpeed ? primarySpeed.toFixed(1) : "—"}</b>
                 <span>Mbps</span>
               </div>
+              <div className="speedPhases" aria-label="Test stages">
+                {(["ping", "download", "upload"] as const).map((stage, index) => phaseIcon(stage, index))}
+              </div>
             </div>
 
             <div className="speedMetricPanel" aria-live="polite">
               <div className="speedMetric compact"><i>↔</i><span>Ping</span><b>{speedDisplay.ping ? speedDisplay.ping.toFixed(0) : "—"}</b><small>ms</small></div>
-              <div className="speedMetric featured"><i>↓</i><span>Download</span><b>{speedDisplay.download ? speedDisplay.download.toFixed(1) : "—"}</b><small>Mbps</small><em /></div>
+              <div className="speedMetric featured"><i>↓</i><span>Download</span><b>{speedDisplay.download ? speedDisplay.download.toFixed(1) : "—"}</b><small>Mbps</small></div>
               <div className="speedMetric compact"><i>≈</i><span>Jitter</span><b>{speedDisplay.jitter ? speedDisplay.jitter.toFixed(0) : "—"}</b><small>ms</small></div>
               <div className="speedMetric"><i>↑</i><span>Upload</span><b>{speedDisplay.upload ? speedDisplay.upload.toFixed(1) : "—"}</b><small>Mbps</small></div>
+              <div className="speedMetric compact"><i>∆</i><span>Loaded</span><b>{speedDisplay.loadedLatency ? speedDisplay.loadedLatency.toFixed(0) : "—"}</b><small>{loadedDelta ? `+${loadedDelta.toFixed(0)} ms · ${speedDisplay.bufferbloat}` : "ms"}</small></div>
             </div>
 
             <div className="speedBottom">
@@ -484,19 +656,23 @@ export default function Home() {
                 <b>{speedMeta?.clientIp || "This device"}</b>
                 <span>{speedResult ? speedQuality(speedResult.download) : isSpeedRunning ? `${gaugeLabel} in progress` : "Ready"}</span>
               </div>
-              <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
-                {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
-              </button>
-              <div className="speedPhases" aria-label="Test stages">
-                {(["ping", "download", "upload"] as const).map((stage, index) => phaseIcon(stage, index))}
-              </div>
               <div className="speedEndpoint right">
                 <b>{speedMeta?.service || "Pulseboard edge"}</b>
                 <span>{speedMeta?.location || "Nearest service edge"}</span>
               </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
-              <small>Uses about 15 MB per complete test. Results reflect the device currently viewing Pulseboard.</small>
+              <small>Runs about 25 seconds and uses larger adaptive transfers. Results reflect this device&apos;s path to Pulseboard.</small>
             </div>
+            {speedHistory.length > 0 && (
+              <div className="speedHistory">
+                <div className="tableHead"><span>TIME</span><span>PING</span><span>DOWN</span><span>UP</span><span>LOADED</span></div>
+                {speedHistory.slice(0, 4).map((item) => (
+                  <div className="speedHistoryRow" key={`${item.timestamp}-${item.download}-${item.upload}`}>
+                    <span>{item.timestamp}</span><span>{item.ping.toFixed(0)} ms</span><span>{item.download.toFixed(1)}</span><span>{item.upload.toFixed(1)}</span><span>{item.loadedLatency.toFixed(0)} ms · {item.bufferbloat}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
           <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for your Mac"}</span></footer>
         </div>

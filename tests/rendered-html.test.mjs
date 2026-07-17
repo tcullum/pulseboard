@@ -38,14 +38,22 @@ test("includes a real, cancellable connection speed test", async () => {
 
   assert.match(page, /id="tools"/);
   assert.match(page, /Connection speed test/);
-  assert.match(page, /PULSEBOARD SPEED/);
   assert.match(page, /Jitter/);
+  assert.match(page, /Loaded/);
   assert.match(page, /speedMeta/);
+  assert.match(page, /SPEED_PHASE_MS/);
+  assert.match(page, /SPEED_STREAMS/);
+  assert.match(page, /response\.body\.getReader/);
+  assert.match(page, /XMLHttpRequest/);
+  assert.match(page, /trimmedMean/);
   assert.match(page, /speedTestController\.current\.abort/);
   assert.match(page, /performance\.now\(\)/);
   assert.match(route, /export async function GET/);
   assert.match(route, /export async function POST/);
   assert.match(route, /mode"\) === "meta"/);
   assert.match(route, /cf-connecting-ip/);
+  assert.match(route, /new ReadableStream/);
+  assert.match(route, /getReader/);
+  assert.match(route, /MAX_TRANSFER_BYTES/);
   assert.match(route, /crypto\.getRandomValues/);
 });
