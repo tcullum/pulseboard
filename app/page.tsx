@@ -26,8 +26,9 @@ type Telemetry = {
 
 type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
 type SpeedResult = { ping: number; jitter: number; download: number; upload: number; loadedLatency: number; bufferbloat: string };
-type SpeedMeta = { clientIp: string; service: string; location: string };
+type SpeedMeta = { clientIp: string; service: string; location: string; country?: string };
 type SpeedHistoryItem = SpeedResult & { timestamp: string };
+type SpeedUnit = "Mbps" | "MB/s";
 
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const SPEED_PHASE_MS = 12_000;
@@ -36,6 +37,9 @@ const SPEED_RAMP_UP_MS = 2_000;
 // For strict multi-connection testing, terminate this route with HTTP/1.1 at the proxy.
 const SPEED_STREAMS = 6;
 const SPEED_WINDOW_MS = 750;
+const SPEED_SCALE_MAX_MBPS = 3000;
+const SPEED_ARC_START = -126;
+const SPEED_ARC_SWEEP = 252;
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
 
 function Mark({ children }: { children: React.ReactNode }) {
@@ -94,9 +98,31 @@ function bufferbloatGrade(delta: number) {
   return "D";
 }
 
+function speedRatio(mbps = 0) {
+  return Math.min(Math.max(mbps / SPEED_SCALE_MAX_MBPS, 0), 1);
+}
+
 function gaugeAngle(mbps = 0) {
-  const normalized = Math.min(Math.max(Math.log10(Math.max(mbps, 1)) / 3, 0), 1);
-  return -126 + normalized * 252;
+  return SPEED_ARC_START + speedRatio(mbps) * SPEED_ARC_SWEEP;
+}
+
+function formatSpeed(mbps = 0, unit: SpeedUnit) {
+  return unit === "MB/s" ? (mbps / 8).toFixed(1) : mbps.toFixed(1);
+}
+
+function formatTick(mbps: number, unit: SpeedUnit) {
+  if (unit === "MB/s") return `${Math.round(mbps / 8)}`;
+  if (mbps >= 1000) return `${mbps / 1000}g`;
+  return `${mbps}`;
+}
+
+function tickPosition(mbps: number) {
+  const angle = (gaugeAngle(mbps) - 90) * Math.PI / 180;
+  const radius = 38;
+  return {
+    left: `${50 + Math.cos(angle) * radius}%`,
+    top: `${50 + Math.sin(angle) * radius}%`,
+  };
 }
 
 function speedQuality(download: number) {
@@ -127,6 +153,8 @@ export default function Home() {
   const [speedHistory, setSpeedHistory] = useState<SpeedHistoryItem[]>([]);
   const [currentSpeed, setCurrentSpeed] = useState(0);
   const [speedProgress, setSpeedProgress] = useState(0);
+  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>("Mbps");
+  const [speedServer, setSpeedServer] = useState("auto");
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
   const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
@@ -442,6 +470,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
+    if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
     const savedHistory = window.localStorage.getItem("pulseboard-speed-history");
     if (savedHistory) {
       try {
@@ -460,6 +489,10 @@ export default function Home() {
     window.localStorage.setItem("pulseboard-theme", theme);
     document.documentElement.dataset.theme = theme;
   }, [theme]);
+
+  useEffect(() => {
+    window.localStorage.setItem("pulseboard-speed-unit", speedUnit);
+  }, [speedUnit]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -495,6 +528,9 @@ export default function Home() {
   const gaugeLabel = speedStage === "ping" ? "Ping" : speedStage === "upload" ? "Upload" : "Download";
   const speedProgressPercent = Math.round(speedProgress * 100);
   const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
+  const speedTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
+  const speedServerLabel = speedServer === "auto" ? "Auto nearest" : "Custom endpoint";
+  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : "Selected by viewer location";
   const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
   const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
     const icons = { ping: "⌾", download: "↓", upload: "↑" };
@@ -623,20 +659,31 @@ export default function Home() {
               <div>
                 <p className="eyebrow">TOOLS · INTERNET</p>
                 <h2 id="speed-test-title">Connection speed test</h2>
-                <span>{isSpeedRunning ? `${gaugeLabel} phase · ${speedProgressPercent}%` : "Self-hosted test against Pulseboard edge"}</span>
+                <span>{isSpeedRunning ? `${gaugeLabel} phase · ${speedProgressPercent}%` : `${speedServerLabel} · 3 Gbps scale`}</span>
               </div>
-              <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
-                {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
-              </button>
+              <div className="speedControls">
+                <div className="speedUnitToggle" aria-label="Speed unit">
+                  {(["Mbps", "MB/s"] as const).map((unit) => <button key={unit} className={speedUnit === unit ? "selected" : ""} onClick={() => setSpeedUnit(unit)}>{unit}</button>)}
+                </div>
+                <label className="speedServerSelect">
+                  <span>Server</span>
+                  <select value={speedServer} onChange={(event) => setSpeedServer(event.target.value)} aria-label="Speed test server">
+                    <option value="auto">Auto nearest edge</option>
+                  </select>
+                </label>
+                <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
+                  {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
+                </button>
+              </div>
             </div>
 
-            <div className={`speedDial ${isSpeedRunning ? "testing" : ""}`} style={{ "--needle-angle": `${gaugeAngle(gaugeValue)}deg`, "--speed-progress": `${Math.min((gaugeValue / 500) * 75, 75)}%` } as React.CSSProperties}>
+            <div className={`speedDial ${isSpeedRunning ? "testing" : ""}`} style={{ "--needle-angle": `${gaugeAngle(gaugeValue)}deg`, "--speed-progress": `${speedRatio(gaugeValue) * 75}%` } as React.CSSProperties}>
               <div className="dialArc" />
-              {[["0", "zero"], ["50", "fifty"], ["100", "hundred"], ["300", "threeHundred"], ["500", "fiveHundred"]].map(([label, position]) => <span key={position} className={`dialTick ${position}`}>{label}</span>)}
+              {speedTicks.map((tick) => <span key={tick} className="dialTick" style={tickPosition(tick)}>{formatTick(tick, speedUnit)}</span>)}
               <div className="dialNeedle" />
               <div className="dialReadout">
-                <b>{primarySpeed ? primarySpeed.toFixed(1) : "—"}</b>
-                <span>Mbps</span>
+                <b>{primarySpeed ? formatSpeed(primarySpeed, speedUnit) : "—"}</b>
+                <span>{speedUnit}</span>
               </div>
               <div className="speedPhases" aria-label="Test stages">
                 {(["ping", "download", "upload"] as const).map((stage, index) => phaseIcon(stage, index))}
@@ -645,9 +692,9 @@ export default function Home() {
 
             <div className="speedMetricPanel" aria-live="polite">
               <div className="speedMetric compact"><i>↔</i><span>Ping</span><b>{speedDisplay.ping ? speedDisplay.ping.toFixed(0) : "—"}</b><small>ms</small></div>
-              <div className="speedMetric featured"><i>↓</i><span>Download</span><b>{speedDisplay.download ? speedDisplay.download.toFixed(1) : "—"}</b><small>Mbps</small></div>
+              <div className="speedMetric featured"><i>↓</i><span>Download</span><b>{speedDisplay.download ? formatSpeed(speedDisplay.download, speedUnit) : "—"}</b><small>{speedUnit}</small></div>
               <div className="speedMetric compact"><i>≈</i><span>Jitter</span><b>{speedDisplay.jitter ? speedDisplay.jitter.toFixed(0) : "—"}</b><small>ms</small></div>
-              <div className="speedMetric"><i>↑</i><span>Upload</span><b>{speedDisplay.upload ? speedDisplay.upload.toFixed(1) : "—"}</b><small>Mbps</small></div>
+              <div className="speedMetric"><i>↑</i><span>Upload</span><b>{speedDisplay.upload ? formatSpeed(speedDisplay.upload, speedUnit) : "—"}</b><small>{speedUnit}</small></div>
               <div className="speedMetric compact"><i>∆</i><span>Loaded</span><b>{speedDisplay.loadedLatency ? speedDisplay.loadedLatency.toFixed(0) : "—"}</b><small>{loadedDelta ? `+${loadedDelta.toFixed(0)} ms · ${speedDisplay.bufferbloat}` : "ms"}</small></div>
             </div>
 
@@ -658,7 +705,7 @@ export default function Home() {
               </div>
               <div className="speedEndpoint right">
                 <b>{speedMeta?.service || "Pulseboard edge"}</b>
-                <span>{speedMeta?.location || "Nearest service edge"}</span>
+                <span>{speedServerDetail}</span>
               </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
               <small>Runs about 25 seconds and uses larger adaptive transfers. Results reflect this device&apos;s path to Pulseboard.</small>
@@ -668,7 +715,7 @@ export default function Home() {
                 <div className="tableHead"><span>TIME</span><span>PING</span><span>DOWN</span><span>UP</span><span>LOADED</span></div>
                 {speedHistory.slice(0, 4).map((item) => (
                   <div className="speedHistoryRow" key={`${item.timestamp}-${item.download}-${item.upload}`}>
-                    <span>{item.timestamp}</span><span>{item.ping.toFixed(0)} ms</span><span>{item.download.toFixed(1)}</span><span>{item.upload.toFixed(1)}</span><span>{item.loadedLatency.toFixed(0)} ms · {item.bufferbloat}</span>
+                    <span>{item.timestamp}</span><span>{item.ping.toFixed(0)} ms</span><span>{formatSpeed(item.download, speedUnit)}</span><span>{formatSpeed(item.upload, speedUnit)}</span><span>{item.loadedLatency.toFixed(0)} ms · {item.bufferbloat}</span>
                   </div>
                 ))}
               </div>

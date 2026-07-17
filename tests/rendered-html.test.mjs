@@ -40,6 +40,12 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(page, /Connection speed test/);
   assert.match(page, /Jitter/);
   assert.match(page, /Loaded/);
+  assert.match(page, /SPEED_SCALE_MAX_MBPS\s*=\s*3000/);
+  assert.match(page, /formatSpeed/);
+  assert.match(page, /formatTick/);
+  assert.match(page, /tickPosition/);
+  assert.match(page, /Auto nearest edge/);
+  assert.match(page, /pulseboard-speed-unit/);
   assert.match(page, /speedMeta/);
   assert.match(page, /SPEED_PHASE_MS/);
   assert.match(page, /SPEED_STREAMS/);
@@ -52,6 +58,7 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(route, /export async function POST/);
   assert.match(route, /mode"\) === "meta"/);
   assert.match(route, /cf-connecting-ip/);
+  assert.match(route, /cf-ipcountry/);
   assert.match(route, /new ReadableStream/);
   assert.match(route, /getReader/);
   assert.match(route, /MAX_TRANSFER_BYTES/);

@@ -25,10 +25,12 @@ export async function GET(request: Request) {
     const forwardedIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
     const clientIp = request.headers.get("cf-connecting-ip") || forwardedIp || "Local device";
     const edgeCode = request.headers.get("cf-ray")?.split("-")[1]?.toUpperCase();
+    const country = request.headers.get("cf-ipcountry") || "";
     return Response.json({
       clientIp,
       service: "Pulseboard edge",
       location: edgeCode ? `${edgeCode} edge` : "Nearest service edge",
+      country,
     }, { headers: noStoreHeaders });
   }
 
