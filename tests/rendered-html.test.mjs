@@ -31,9 +31,10 @@ test("detects missing styles and prevents stale application shells", async () =>
 });
 
 test("includes a real, cancellable connection speed test", async () => {
-  const [page, route] = await Promise.all([
+  const [page, route, companion] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/api/speed-test/route.ts", root), "utf8"),
+    readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
   ]);
 
   assert.match(page, /id="tools"/);
@@ -45,7 +46,12 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(page, /formatTick/);
   assert.match(page, /tickPosition/);
   assert.match(page, /Auto nearest edge/);
+  assert.match(page, /This Mac companion/);
+  assert.match(page, /Custom endpoint/);
+  assert.match(page, /LOCAL_SPEED_TEST_URL/);
+  assert.match(page, /speedTestUrl/);
   assert.match(page, /pulseboard-speed-unit/);
+  assert.match(page, /pulseboard-speed-custom-url/);
   assert.match(page, /speedMeta/);
   assert.match(page, /SPEED_PHASE_MS/);
   assert.match(page, /SPEED_STREAMS/);
@@ -63,4 +69,9 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(route, /getReader/);
   assert.match(route, /MAX_TRANSFER_BYTES/);
   assert.match(route, /crypto\.getRandomValues/);
+  assert.match(companion, /\/speed-test/);
+  assert.match(companion, /GET, POST, OPTIONS/);
+  assert.match(companion, /Content-Encoding/);
+  assert.match(companion, /request\.on\("data"/);
+  assert.match(companion, /randomFillSync/);
 });

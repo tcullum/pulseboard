@@ -29,8 +29,10 @@ type SpeedResult = { ping: number; jitter: number; download: number; upload: num
 type SpeedMeta = { clientIp: string; service: string; location: string; country?: string };
 type SpeedHistoryItem = SpeedResult & { timestamp: string };
 type SpeedUnit = "Mbps" | "MB/s";
+type SpeedServerChoice = "auto" | "mac" | "custom";
 
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
+const LOCAL_SPEED_TEST_URL = "http://127.0.0.1:4319/speed-test";
 const SPEED_PHASE_MS = 12_000;
 const SPEED_RAMP_UP_MS = 2_000;
 // If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
@@ -125,6 +127,17 @@ function tickPosition(mbps: number) {
   };
 }
 
+function normalizeSpeedBase(value: string) {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function speedTestUrl(baseUrl: string, mode: string, params: Record<string, string | number> = {}) {
+  const search = new URLSearchParams({ mode });
+  for (const [key, value] of Object.entries(params)) search.set(key, String(value));
+  search.set("nonce", `${Date.now()}-${Math.random()}`);
+  return `${baseUrl}?${search.toString()}`;
+}
+
 function speedQuality(download: number) {
   if (download >= 200) return "Excellent";
   if (download >= 75) return "Very good";
@@ -154,7 +167,8 @@ export default function Home() {
   const [currentSpeed, setCurrentSpeed] = useState(0);
   const [speedProgress, setSpeedProgress] = useState(0);
   const [speedUnit, setSpeedUnit] = useState<SpeedUnit>("Mbps");
-  const [speedServer, setSpeedServer] = useState("auto");
+  const [speedServer, setSpeedServer] = useState<SpeedServerChoice>("auto");
+  const [customSpeedServer, setCustomSpeedServer] = useState("");
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
   const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
@@ -211,6 +225,10 @@ export default function Home() {
       speedUploadRequests.current.forEach((request) => request.abort());
       return;
     }
+    if (speedServer === "custom" && !customSpeedServer.trim()) {
+      setSpeedError("Enter a compatible speed-test endpoint URL first.");
+      return;
+    }
 
     const controller = new AbortController();
     speedTestController.current = controller;
@@ -219,11 +237,22 @@ export default function Home() {
     setCurrentSpeed(0);
     setSpeedProgress(0);
     setSpeedError("");
+    const speedBaseUrl = speedServer === "mac"
+      ? LOCAL_SPEED_TEST_URL
+      : speedServer === "custom" && customSpeedServer.trim()
+        ? normalizeSpeedBase(customSpeedServer)
+        : "/api/speed-test";
+    const serverName = speedServer === "mac" ? "This Mac companion" : speedServer === "custom" ? "Custom server" : "Pulseboard edge";
+    setSpeedMeta({
+      clientIp: speedServer === "mac" ? "This browser" : speedServer === "custom" ? "This device" : "This device",
+      service: serverName,
+      location: speedServer === "mac" ? "127.0.0.1 local companion" : speedServer === "custom" ? normalizeSpeedBase(customSpeedServer) : "Nearest service edge",
+    });
 
     try {
-      fetch(`/api/speed-test?mode=meta&nonce=${Date.now()}`, {
+      fetch(speedTestUrl(speedBaseUrl, "meta"), {
         cache: "no-store",
-        credentials: "same-origin",
+        credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
         signal: controller.signal,
       })
         .then((response) => response.ok ? response.json() : null)
@@ -234,12 +263,12 @@ export default function Home() {
       const pingSamples: number[] = [];
       const pingOnce = async () => {
         const started = performance.now();
-        const response = await fetch(`/api/speed-test?mode=ping&nonce=${Date.now()}-${Math.random()}`, {
+        const response = await fetch(speedTestUrl(speedBaseUrl, "ping"), {
           cache: "no-store",
-          credentials: "same-origin",
+          credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
           signal: controller.signal,
         });
-        if (!response.ok) throw new Error("The test server did not respond.");
+        if (!response.ok) throw new Error(`${serverName} did not respond.`);
         await response.text();
         return performance.now() - started;
       };
@@ -310,12 +339,12 @@ export default function Home() {
         let size = 4 * 1024 * 1024;
         while (performance.now() < until && !controller.signal.aborted) {
           const requestStarted = performance.now();
-          const response = await fetch(`/api/speed-test?mode=download&size=${size}&stream=${stream}&nonce=${Date.now()}`, {
+          const response = await fetch(speedTestUrl(speedBaseUrl, "download", { size, stream }), {
             cache: "no-store",
-            credentials: "same-origin",
+            credentials: speedBaseUrl.startsWith("/") ? "same-origin" : "omit",
             signal: controller.signal,
           });
-          if (!response.ok) throw new Error("The download test could not finish.");
+          if (!response.ok) throw new Error(`The download test to ${serverName} could not finish.`);
 
           if (!response.body) {
             onBytes((await response.arrayBuffer()).byteLength);
@@ -356,8 +385,8 @@ export default function Home() {
             const abort = () => request.abort();
             speedUploadRequests.current.push(request);
             controller.signal.addEventListener("abort", abort, { once: true });
-            request.open("POST", `/api/speed-test?mode=upload&stream=${stream}&nonce=${Date.now()}`, true);
-            request.withCredentials = true;
+            request.open("POST", speedTestUrl(speedBaseUrl, "upload", { stream }), true);
+            request.withCredentials = false;
             request.setRequestHeader("Content-Type", "application/octet-stream");
             request.upload.onprogress = (event) => {
               const next = event.loaded || 0;
@@ -370,7 +399,7 @@ export default function Home() {
               controller.signal.removeEventListener("abort", abort);
               speedUploadRequests.current = speedUploadRequests.current.filter((item) => item !== request);
               if (request.status >= 200 && request.status < 300) resolve();
-              else reject(new Error(request.status === 413 ? "The upload sample was rejected by the server size limit." : "The upload test could not finish."));
+              else reject(new Error(request.status === 413 ? "The upload sample was rejected by the server size limit." : `The upload test to ${serverName} could not finish.`));
             };
             request.onerror = () => {
               controller.signal.removeEventListener("abort", abort);
@@ -415,7 +444,7 @@ export default function Home() {
       speedUploadRequests.current = [];
       if (speedTestController.current === controller) speedTestController.current = null;
     }
-  }, []);
+  }, [customSpeedServer, speedServer]);
 
   useEffect(() => {
     void fetchTelemetry();
@@ -471,6 +500,9 @@ export default function Home() {
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
     if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
+    const savedServer = window.localStorage.getItem("pulseboard-speed-server");
+    if (savedServer === "mac" || savedServer === "custom") setSpeedServer(savedServer);
+    setCustomSpeedServer(window.localStorage.getItem("pulseboard-speed-custom-url") || "");
     const savedHistory = window.localStorage.getItem("pulseboard-speed-history");
     if (savedHistory) {
       try {
@@ -493,6 +525,14 @@ export default function Home() {
   useEffect(() => {
     window.localStorage.setItem("pulseboard-speed-unit", speedUnit);
   }, [speedUnit]);
+
+  useEffect(() => {
+    window.localStorage.setItem("pulseboard-speed-server", speedServer);
+  }, [speedServer]);
+
+  useEffect(() => {
+    if (customSpeedServer.trim()) window.localStorage.setItem("pulseboard-speed-custom-url", customSpeedServer.trim());
+  }, [customSpeedServer]);
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -529,8 +569,9 @@ export default function Home() {
   const speedProgressPercent = Math.round(speedProgress * 100);
   const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
   const speedTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
-  const speedServerLabel = speedServer === "auto" ? "Auto nearest" : "Custom endpoint";
-  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : "Selected by viewer location";
+  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "This Mac companion" : "Custom endpoint";
+  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this Mac" : "Selected by viewer location";
+  const canRunSpeedTest = speedServer !== "custom" || Boolean(customSpeedServer.trim());
   const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
   const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
     const icons = { ping: "⌾", download: "↓", upload: "↑" };
@@ -667,11 +708,16 @@ export default function Home() {
                 </div>
                 <label className="speedServerSelect">
                   <span>Server</span>
-                  <select value={speedServer} onChange={(event) => setSpeedServer(event.target.value)} aria-label="Speed test server">
+                  <select value={speedServer} onChange={(event) => setSpeedServer(event.target.value as SpeedServerChoice)} aria-label="Speed test server">
                     <option value="auto">Auto nearest edge</option>
+                    <option value="mac">This Mac companion</option>
+                    <option value="custom">Custom endpoint</option>
                   </select>
                 </label>
-                <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} onClick={() => void runSpeedTest()}>
+                {speedServer === "custom" && (
+                  <input className="speedCustomInput" value={customSpeedServer} onChange={(event) => setCustomSpeedServer(event.target.value)} placeholder="https://server.example/speed-test" aria-label="Custom speed-test endpoint URL" />
+                )}
+                <button className={`speedAction ${isSpeedRunning ? "testing" : ""}`} disabled={!canRunSpeedTest && !isSpeedRunning} onClick={() => void runSpeedTest()}>
                   {isSpeedRunning ? "Stop test" : speedResult ? "Test again" : "Run speed test"}
                 </button>
               </div>
@@ -708,7 +754,7 @@ export default function Home() {
                 <span>{speedServerDetail}</span>
               </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
-              <small>Runs about 25 seconds and uses larger adaptive transfers. Results reflect this device&apos;s path to Pulseboard.</small>
+              <small>Runs about 25 seconds. Custom servers must expose the Pulseboard speed-test API with browser access enabled.</small>
             </div>
             {speedHistory.length > 0 && (
               <div className="speedHistory">

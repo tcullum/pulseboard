@@ -5,9 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomFillSync } from "node:crypto";
 
 const HOST = "127.0.0.1";
 const PORT = 4319;
+const MAX_SPEED_BYTES = 100 * 1024 * 1024;
+const SPEED_BUFFER_BYTES = 8 * 1024 * 1024;
+const SPEED_CHUNK_BYTES = 64 * 1024;
 const CONFIG_PATH = path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
 const ALLOWED_ORIGINS = new Set([
   "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
@@ -39,6 +43,7 @@ let previousCpuUsage = 0;
 let previousNetwork = null;
 let previousNetworkAt = Date.now();
 let relayState = "starting";
+let speedBuffer = null;
 
 function cpuUsage() {
   const current = cpuSnapshot();
@@ -142,6 +147,13 @@ function processStats() {
   return { total: rows.length, running: rows.filter((row) => row.state.startsWith("R")).length, items };
 }
 
+function getSpeedBuffer() {
+  if (speedBuffer) return speedBuffer;
+  speedBuffer = Buffer.allocUnsafe(SPEED_BUFFER_BYTES);
+  randomFillSync(speedBuffer);
+  return speedBuffer;
+}
+
 const staticDevice = {
   name: run("/usr/sbin/scutil", ["--get", "ComputerName"]) || os.hostname(),
   model: sysctl("hw.model", "Mac"),
@@ -218,7 +230,7 @@ function corsHeaders(origin) {
   const allowed = ALLOWED_ORIGINS.has(origin) ? origin : "";
   return {
     ...(allowed ? { "Access-Control-Allow-Origin": allowed } : {}),
-    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     "Access-Control-Allow-Private-Network": "true",
     "Access-Control-Max-Age": "7200",
@@ -227,22 +239,106 @@ function corsHeaders(origin) {
   };
 }
 
+function handleSpeedTest(request, response, headers, url) {
+  if (request.method === "GET" && url.searchParams.get("mode") === "meta") {
+    response.writeHead(200, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({
+      clientIp: "This browser",
+      service: "This Mac companion",
+      location: `127.0.0.1:${PORT}`,
+      country: "",
+    }));
+    return true;
+  }
+
+  if (request.method === "GET" && url.searchParams.get("mode") === "ping") {
+    response.writeHead(200, { "Content-Type": "text/plain", ...headers });
+    response.end("pulse");
+    return true;
+  }
+
+  if (request.method === "GET" && url.searchParams.get("mode") === "download") {
+    const requestedSize = Number(url.searchParams.get("size") || 0);
+    const size = Math.min(Math.max(Math.round(requestedSize), 64 * 1024), MAX_SPEED_BYTES);
+    const source = getSpeedBuffer();
+    let sent = 0;
+    response.writeHead(200, {
+      ...headers,
+      "Content-Type": "application/octet-stream",
+      "Content-Encoding": "identity",
+      "Content-Length": String(size),
+    });
+    const writeChunk = () => {
+      while (sent < size) {
+        const offset = sent % source.length;
+        const chunkSize = Math.min(size - sent, source.length - offset, SPEED_CHUNK_BYTES);
+        const shouldContinue = response.write(source.subarray(offset, offset + chunkSize));
+        sent += chunkSize;
+        if (!shouldContinue) {
+          response.once("drain", writeChunk);
+          return;
+        }
+      }
+      response.end();
+    };
+    writeChunk();
+    return true;
+  }
+
+  if (request.method === "POST" && url.searchParams.get("mode") === "upload") {
+    const declaredLength = Number(request.headers["content-length"] || 0);
+    if (declaredLength > MAX_SPEED_BYTES) {
+      response.writeHead(413, { "Content-Type": "application/json", ...headers });
+      response.end(JSON.stringify({ error: "Upload sample is too large" }));
+      request.destroy();
+      return true;
+    }
+
+    let received = 0;
+    let rejected = false;
+    request.on("data", (chunk) => {
+      received += chunk.length;
+      if (received > MAX_SPEED_BYTES && !rejected) {
+        rejected = true;
+        response.writeHead(413, { "Content-Type": "application/json", ...headers });
+        response.end(JSON.stringify({ error: "Upload sample is too large" }));
+        request.destroy();
+      }
+    });
+    request.on("end", () => {
+      if (rejected) return;
+      response.writeHead(200, { "Content-Type": "application/json", ...headers });
+      response.end(JSON.stringify({ received }));
+    });
+    request.on("error", () => {
+      if (response.headersSent) return;
+      response.writeHead(500, { "Content-Type": "application/json", ...headers });
+      response.end(JSON.stringify({ error: "Upload failed" }));
+    });
+    return true;
+  }
+
+  return false;
+}
+
 const server = http.createServer((request, response) => {
   const origin = request.headers.origin || "";
   const headers = corsHeaders(origin);
+  const url = new URL(request.url || "/", `http://${request.headers.host || `${HOST}:${PORT}`}`);
   if (request.method === "OPTIONS") {
     response.writeHead(ALLOWED_ORIGINS.has(origin) ? 204 : 403, headers);
     response.end();
     return;
   }
-  if (request.method !== "GET" || request.url !== "/telemetry") {
-    response.writeHead(404, { "Content-Type": "application/json", ...headers });
-    response.end(JSON.stringify({ error: "Not found" }));
-    return;
-  }
   if (origin && !ALLOWED_ORIGINS.has(origin)) {
     response.writeHead(403, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify({ error: "Origin not allowed" }));
+    return;
+  }
+  if (url.pathname === "/speed-test" && handleSpeedTest(request, response, headers, url)) return;
+  if (request.method !== "GET" || url.pathname !== "/telemetry") {
+    response.writeHead(404, { "Content-Type": "application/json", ...headers });
+    response.end(JSON.stringify({ error: "Not found" }));
     return;
   }
   try {
