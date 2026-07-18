@@ -13,9 +13,11 @@
     "telemetry:install": "zsh companion/install.sh",
     "telemetry:install:mac": "zsh companion/install.sh",
     "telemetry:install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File companion/install-windows.ps1",
+    "telemetry:install:linux": "bash companion/install-linux.sh",
     "telemetry:uninstall": "zsh companion/uninstall.sh",
     "telemetry:uninstall:mac": "zsh companion/uninstall.sh",
     "telemetry:uninstall:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File companion/uninstall-windows.ps1",
+    "telemetry:uninstall:linux": "bash companion/uninstall-linux.sh",
     "test": "npm run build && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

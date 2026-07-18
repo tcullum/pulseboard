@@ -18,9 +18,12 @@ const IPERF3_PARALLEL_STREAMS = 4;
 const IPERF3_TIMEOUT_MS = 22_000;
 const isWindows = process.platform === "win32";
 const isMac = process.platform === "darwin";
+const isLinux = process.platform === "linux";
 const CONFIG_PATH = isWindows
   ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Pulseboard", "relay.json")
-  : path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
+  : isMac
+    ? path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json")
+    : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Pulseboard", "relay.json");
 const ALLOWED_ORIGINS = new Set([
   "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
   "http://localhost:3000",
@@ -195,6 +198,19 @@ function sysctl(key, fallback = "") {
   return run("/usr/sbin/sysctl", ["-n", key]) || fallback;
 }
 
+function linuxOsRelease() {
+  if (!isLinux) return {};
+  try {
+    return Object.fromEntries(fs.readFileSync("/etc/os-release", "utf8").split("\n").map((line) => {
+      const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
+      if (!match) return null;
+      return [match[1], match[2].replace(/^"|"$/g, "")];
+    }).filter(Boolean));
+  } catch {
+    return {};
+  }
+}
+
 function cpuSnapshot() {
   return os.cpus().reduce((sum, cpu) => {
     const total = Object.values(cpu.times).reduce((value, tick) => value + tick, 0);
@@ -239,6 +255,32 @@ function vmStats() {
     return { totalBytes: total, usedBytes: used, freeBytes: free, wiredBytes: 0, compressedBytes: 0, pressure };
   }
 
+  if (isLinux) {
+    const total = os.totalmem();
+    const free = os.freemem();
+    const values = {};
+    try {
+      for (const line of fs.readFileSync("/proc/meminfo", "utf8").split("\n")) {
+        const match = line.match(/^(\w+):\s+(\d+)/);
+        if (match) values[match[1]] = Number(match[2]) * 1024;
+      }
+    } catch {
+      // Fall back to Node's memory view below.
+    }
+    const available = values.MemAvailable || free;
+    const used = Math.max(0, total - available);
+    const pressureRatio = total ? available / total : 1;
+    const pressure = pressureRatio >= 0.25 ? "Low" : pressureRatio >= 0.12 ? "Medium" : "High";
+    return {
+      totalBytes: total,
+      usedBytes: used,
+      freeBytes: available,
+      wiredBytes: values.Slab || 0,
+      compressedBytes: values.Zswap || values.Zswapped || 0,
+      pressure,
+    };
+  }
+
   const output = run("/usr/bin/vm_stat");
   const pageSize = Number(output.match(/page size of (\d+) bytes/)?.[1] || 16384);
   const values = {};
@@ -270,6 +312,18 @@ function diskStats() {
     }
   }
 
+  if (isLinux) {
+    try {
+      const stats = fs.statfsSync("/");
+      const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+      const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+      const usedBytes = Math.max(0, totalBytes - freeBytes);
+      return { name: "Root filesystem", totalBytes, usedBytes, freeBytes, percent: totalBytes ? Number((usedBytes / totalBytes * 100).toFixed(1)) : 0 };
+    } catch {
+      return { name: "Root filesystem", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 };
+    }
+  }
+
   const lines = run("/bin/df", ["-k", "/System/Volumes/Data"]).split("\n");
   const columns = lines.at(-1)?.trim().split(/\s+/) || [];
   const totalBytes = Number(columns[1] || 0) * 1024;
@@ -290,6 +344,39 @@ function batteryStats() {
       condition: "Desktop power",
       powerWatts: null,
     };
+  }
+
+  if (isLinux) {
+    const base = "/sys/class/power_supply";
+    try {
+      const battery = fs.readdirSync(base).find((entry) => /^BAT/i.test(entry));
+      if (!battery) throw new Error("No battery");
+      const batteryPath = path.join(base, battery);
+      const capacity = Number(fs.readFileSync(path.join(batteryPath, "capacity"), "utf8").trim() || 0);
+      const status = fs.readFileSync(path.join(batteryPath, "status"), "utf8").trim() || "Unknown";
+      const healthPercent = Number(run("bash", ["-lc", `cd ${JSON.stringify(batteryPath)} && if [[ -f energy_full_design && -f energy_full ]]; then awk '{if (NR==1) d=$1; else f=$1} END {if (d>0) printf "%.0f", f/d*100; else print 0}' energy_full_design energy_full; elif [[ -f charge_full_design && -f charge_full ]]; then awk '{if (NR==1) d=$1; else f=$1} END {if (d>0) printf "%.0f", f/d*100; else print 0}' charge_full_design charge_full; fi`], 1500) || 0);
+      return {
+        available: true,
+        percent: capacity,
+        state: status,
+        timeRemainingMinutes: null,
+        cycleCount: 0,
+        healthPercent: healthPercent || 0,
+        condition: healthPercent >= 80 || !healthPercent ? "Normal" : "Service recommended",
+        powerWatts: null,
+      };
+    } catch {
+      return {
+        available: false,
+        percent: 0,
+        state: "Desktop power",
+        timeRemainingMinutes: null,
+        cycleCount: 0,
+        healthPercent: 0,
+        condition: "No battery sensor",
+        powerWatts: null,
+      };
+    }
   }
 
   const pmset = run("/usr/bin/pmset", ["-g", "batt"]);
@@ -320,6 +407,24 @@ function thermalStats() {
     return { available: false, status: "Unavailable", speedLimit: 100 };
   }
 
+  if (isLinux) {
+    try {
+      const zones = fs.readdirSync("/sys/class/thermal").filter((entry) => entry.startsWith("thermal_zone"));
+      const temps = zones.map((zone) => {
+        try {
+          return Number(fs.readFileSync(path.join("/sys/class/thermal", zone, "temp"), "utf8").trim()) / 1000;
+        } catch {
+          return 0;
+        }
+      }).filter((value) => value > 0);
+      if (!temps.length) return { available: false, status: "Unavailable", speedLimit: 100 };
+      const max = Math.max(...temps);
+      return { available: true, status: max >= 85 ? "Critical" : max >= 72 ? "Elevated" : "Normal", speedLimit: 100, temperatureCelsius: Number(max.toFixed(1)) };
+    } catch {
+      return { available: false, status: "Unavailable", speedLimit: 100 };
+    }
+  }
+
   const output = run("/usr/bin/pmset", ["-g", "therm"]);
   const warning = /warning level/i.test(output) && !/No thermal warning/i.test(output);
   const speedLimit = Number(output.match(/CPU_Speed_Limit\s*=\s*(\d+)/)?.[1] || 100);
@@ -334,6 +439,36 @@ function networkStats() {
     const address = active?.entry.address || "Unavailable";
     const adapter = powershellJson(`Get-NetAdapterStatistics -Name '${interfaceName.replace(/'/g, "''")}' -ErrorAction SilentlyContinue | Select-Object ReceivedBytes,SentBytes`);
     const current = { received: Number(adapter?.ReceivedBytes || 0), sent: Number(adapter?.SentBytes || 0) };
+    const now = Date.now();
+    const elapsed = Math.max(0.25, (now - previousNetworkAt) / 1000);
+    const downloadBytesPerSecond = previousNetwork ? Math.max(0, (current.received - previousNetwork.received) / elapsed) : 0;
+    const uploadBytesPerSecond = previousNetwork ? Math.max(0, (current.sent - previousNetwork.sent) / elapsed) : 0;
+    previousNetwork = current;
+    previousNetworkAt = now;
+    return { interface: interfaceName, address, downloadBytesPerSecond, uploadBytesPerSecond };
+  }
+
+  if (isLinux) {
+    let interfaceName = "";
+    try {
+      const route = fs.readFileSync("/proc/net/route", "utf8").split("\n").slice(1).find((line) => line.split(/\s+/)[1] === "00000000");
+      interfaceName = route?.split(/\s+/)[0] || "";
+    } catch {
+      // Fall back to the first non-internal IPv4 interface below.
+    }
+    const networkEntries = Object.entries(os.networkInterfaces()).flatMap(([name, entries]) => (entries || []).map((entry) => ({ name, entry })));
+    const active = networkEntries.find(({ name, entry }) => (!interfaceName || name === interfaceName) && entry.family === "IPv4" && !entry.internal)
+      || networkEntries.find(({ entry }) => entry.family === "IPv4" && !entry.internal);
+    interfaceName = active?.name || interfaceName || "eth0";
+    const address = active?.entry.address || "Unavailable";
+    let current = { received: 0, sent: 0 };
+    try {
+      const line = fs.readFileSync("/proc/net/dev", "utf8").split("\n").find((item) => item.trim().startsWith(`${interfaceName}:`));
+      const columns = line?.replace(":", " ").trim().split(/\s+/) || [];
+      current = { received: Number(columns[1] || 0), sent: Number(columns[9] || 0) };
+    } catch {
+      // Keep zero counters.
+    }
     const now = Date.now();
     const elapsed = Math.max(0.25, (now - previousNetworkAt) / 1000);
     const downloadBytesPerSecond = previousNetwork ? Math.max(0, (current.received - previousNetwork.received) / elapsed) : 0;
@@ -449,7 +584,25 @@ function macDevice() {
   };
 }
 
-const staticDevice = isWindows ? windowsDevice() : macDevice();
+function linuxDevice() {
+  const release = linuxOsRelease();
+  const name = os.hostname();
+  const model = usefulSystemText(run("bash", ["-lc", "cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || hostnamectl --static 2>/dev/null"], 1500), "Linux PC");
+  return {
+    id: stableDeviceId("linux", name),
+    name,
+    model,
+    chip: os.cpus()[0]?.model || "Linux CPU",
+    os: release.PRETTY_NAME || `${os.type()} ${os.release()}`,
+    platform: "linux",
+    role: "Linux companion",
+    logicalCores: os.cpus().length,
+    performanceCores: os.cpus().length,
+    efficiencyCores: 0,
+  };
+}
+
+const staticDevice = isWindows ? windowsDevice() : isMac ? macDevice() : linuxDevice();
 
 function xmlAttribute(text, name) {
   const match = String(text || "").match(new RegExp(`${name}="([^"]*)"`, "i"));
@@ -466,9 +619,9 @@ function plexPreferencesToken() {
   if (isWindows) {
     return powershell("(Get-ItemProperty -Path 'HKCU:\\Software\\Plex, Inc.\\Plex Media Server' -Name PlexOnlineToken -ErrorAction SilentlyContinue).PlexOnlineToken", 1500);
   }
-  const candidates = isWindows
-    ? []
-    : [path.join(os.homedir(), "Library", "Application Support", "Plex Media Server", "Preferences.xml")];
+  const candidates = isMac
+    ? [path.join(os.homedir(), "Library", "Application Support", "Plex Media Server", "Preferences.xml")]
+    : [];
   for (const candidate of candidates) {
     try {
       const token = xmlAttribute(fs.readFileSync(candidate, "utf8"), "PlexOnlineToken");
@@ -648,7 +801,8 @@ async function plexPlaybackTelemetry() {
 
 async function plexStats(processes) {
   if (!isWindows) {
-    return { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows.", playback: { configured: false, reachable: false, server: "Windows only", sessions: 0, transcodeSessions: 0, items: [] } };
+    const role = isMac ? "Mac companion" : "Linux companion";
+    return { available: false, status: role, processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex playback is shown on the Windows Plex client.", playback: { configured: false, reachable: false, server: role, sessions: 0, transcodeSessions: 0, items: [] } };
   }
   const items = processes.items.filter((item) => /plex/i.test(item.name));
   const cpu = items.reduce((total, item) => total + item.cpu, 0);
@@ -699,7 +853,7 @@ function initialTelemetry() {
     device: staticDevice,
     cpu: cpuUsage(),
     memory,
-    disk: { name: isWindows ? "Windows (C:)" : "Macintosh HD", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 },
+    disk: { name: isWindows ? "Windows (C:)" : isMac ? "Macintosh HD" : "Root filesystem", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 },
     battery: { available: !isWindows, percent: 0, state: "Starting", timeRemainingMinutes: null, cycleCount: 0, healthPercent: 0, condition: "Checking", powerWatts: null },
     thermal: { available: !isWindows, status: isWindows ? "Unavailable" : "Normal", speedLimit: 100 },
     network: { interface: "Starting", address: "Unavailable", downloadBytesPerSecond: 0, uploadBytesPerSecond: 0 },
@@ -708,7 +862,7 @@ function initialTelemetry() {
     processes: { total: 0, running: 0, items: [] },
     plex: isWindows
       ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity.", playback: { configured: false, reachable: false, server: "Checking", sessions: 0, transcodeSessions: 0, items: [] } }
-      : { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows.", playback: { configured: false, reachable: false, server: "Windows only", sessions: 0, transcodeSessions: 0, items: [] } },
+      : { available: false, status: isMac ? "Mac companion" : "Linux companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex playback is shown on the Windows Plex client.", playback: { configured: false, reachable: false, server: isMac ? "Mac companion" : "Linux companion", sessions: 0, transcodeSessions: 0, items: [] } },
   };
 }
 

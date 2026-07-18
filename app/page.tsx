@@ -126,7 +126,7 @@ function deviceId(telemetry: Telemetry) {
 }
 
 function platformLabel(platform?: string) {
-  return platform === "windows" ? "Windows" : platform === "macos" ? "Mac" : "Device";
+  return platform === "windows" ? "Windows" : platform === "macos" ? "Mac" : platform === "linux" ? "Linux" : "Device";
 }
 
 function isWindowsClient(device?: { id?: string; platform?: string; name?: string }) {
@@ -165,6 +165,7 @@ export default function Home() {
   const [cpuHistory, setCpuHistory] = useState<number[]>(Array(36).fill(0));
   const [activeView, setActiveView] = useState("overview");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [addMachineOpen, setAddMachineOpen] = useState(false);
   const [refreshInterval, setRefreshInterval] = useState(2500);
   const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
@@ -705,7 +706,10 @@ export default function Home() {
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSettingsOpen(false);
+      if (event.key === "Escape") {
+        setSettingsOpen(false);
+        setAddMachineOpen(false);
+      }
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
@@ -821,11 +825,11 @@ export default function Home() {
                 const online = snapshot?.status === "live" && !snapshot.stale;
                 if (isPlaceholder) {
                   return (
-                    <article className="fleetCard addMachine" key={device.id}>
+                    <button className="fleetCard addMachine" key={device.id} onClick={() => setAddMachineOpen(true)}>
                       <div className="fleetCardTop"><div><span>{device.eyebrow}</span><b>{device.displayName}</b></div><i>Ready</i></div>
-                      <p>Install the companion on another computer and it will appear here automatically.</p>
+                      <p>Install the Fedora/Linux companion and this slot will become its live dashboard.</p>
                       <div className="fleetAddGlyph">+</div>
-                    </article>
+                    </button>
                   );
                 }
                 return (
@@ -1081,6 +1085,24 @@ export default function Home() {
             </div>
             <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Direct viewing stays on the local machine. Remote viewing uses an authenticated encrypted relay that keeps only the newest telemetry snapshot per client.</span></div></div>
             <div className="settingsFooter"><span>Current connection</span><code>{transport === "relay" ? "Encrypted cloud relay" : transport === "direct" ? "127.0.0.1:4319" : "Not connected"}</code></div>
+          </section>
+        </div>
+      )}
+
+      {addMachineOpen && (
+        <div className="modalBackdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAddMachineOpen(false); }}>
+          <section className="settingsPanel addMachinePanel" role="dialog" aria-modal="true" aria-labelledby="add-machine-title">
+            <div className="settingsHeader"><div><p className="eyebrow">PULSEBOARD FLEET</p><h2 id="add-machine-title">Add Fedora machine</h2></div><button className="closeButton" aria-label="Close add machine" onClick={() => setAddMachineOpen(false)}>×</button></div>
+            <div className="settingGroup">
+              <div><b>Linux companion</b><span>Run the companion on Fedora with the same relay credentials. Once it sends a sample, the third fleet slot becomes a live machine tile.</span></div>
+            </div>
+            <pre className="setupCommand">{`git clone https://github.com/tcullum/pulseboard.git
+cd pulseboard
+npm install
+PULSEBOARD_RELAY_TOKEN="your-device-token" \\
+PULSEBOARD_SIWC_TOKEN="your-sites-token" \\
+npm run telemetry:install:linux`}</pre>
+            <div className="privacyNote"><Mark>⌁</Mark><div><b>Relay credentials stay local</b><span>The dashboard never exposes relay tokens. Put them only in the Fedora shell or local companion config.</span></div></div>
           </section>
         </div>
       )}

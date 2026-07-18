@@ -74,9 +74,13 @@ test("surfaces Plex playback stream telemetry", async () => {
 });
 
 test("renders a three-slot fleet dashboard above machine details", async () => {
-  const [page, css] = await Promise.all([
+  const [page, css, packageJson, linuxInstaller, linuxUninstaller, companion] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
+    readFile(new URL("package.json", root), "utf8"),
+    readFile(new URL("companion/install-linux.sh", root), "utf8"),
+    readFile(new URL("companion/uninstall-linux.sh", root), "utf8"),
+    readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
   ]);
 
   assert.match(page, /Pulseboard fleet/);
@@ -84,7 +88,20 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
   assert.match(page, /fleetPlaceholders/);
   assert.match(page, /up to 3 dashboard slots/);
   assert.match(page, /SELECTED MACHINE/);
+  assert.match(page, /Add Fedora machine/);
+  assert.match(page, /platform === "linux"/);
+  assert.match(css, /\.addMachinePanel/);
+  assert.match(css, /\.setupCommand/);
   assert.match(css, /\.fleetGrid/);
   assert.match(css, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
   assert.match(css, /\.addMachine/);
+  assert.match(packageJson, /telemetry:install:linux/);
+  assert.match(packageJson, /telemetry:uninstall:linux/);
+  assert.match(linuxInstaller, /systemctl --user/);
+  assert.match(linuxInstaller, /com\.pulseboard\.telemetry\.service/);
+  assert.match(linuxUninstaller, /systemctl --user disable --now/);
+  assert.match(companion, /isLinux/);
+  assert.match(companion, /linuxDevice/);
+  assert.match(companion, /\/proc\/meminfo/);
+  assert.match(companion, /\/proc\/net\/dev/);
 });

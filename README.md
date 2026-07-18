@@ -94,9 +94,9 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 
 ## Pulseboard Companion
 
-The Windows companion reports local machine telemetry, Plex process usage, and,
-when a Plex token is available, active Plex playback sessions from
-`/status/sessions`.
+The companion reports local machine telemetry for macOS, Windows, and
+Linux/Fedora machines. On Windows it also reports Plex process usage and, when a
+Plex token is available, active Plex playback sessions from `/status/sessions`.
 
 Optional Plex playback setup:
 
@@ -108,6 +108,17 @@ npm run telemetry:install:windows
 
 The token stays in the local companion config and is used only for calls to the
 Plex server. It is not sent to the Pulseboard dashboard.
+
+Linux/Fedora companion setup:
+
+```bash
+PULSEBOARD_RELAY_TOKEN="your-device-token" \
+PULSEBOARD_SIWC_TOKEN="your-sites-token" \
+npm run telemetry:install:linux
+```
+
+The Linux installer creates a user-level systemd service and stores relay
+credentials in `~/.config/Pulseboard/relay.json`.
 
 ## Learn More
 
