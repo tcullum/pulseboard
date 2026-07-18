@@ -105,6 +105,29 @@ function usefulSystemText(value, fallback = "") {
   return text && !/^default string$/i.test(text) && !/^system product name$/i.test(text) ? text : fallback;
 }
 
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let quoted = false;
+  for (const char of line) {
+    if (char === "\"") {
+      quoted = !quoted;
+    } else if (char === "," && !quoted) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+}
+
+function memoryTextToBytes(value) {
+  const kb = Number(String(value || "").replace(/[^\d]/g, ""));
+  return Number.isFinite(kb) ? kb * 1024 : 0;
+}
+
 function findIperf3() {
   const candidates = [
     process.env.IPERF3_PATH,
@@ -227,12 +250,15 @@ function vmStats() {
 
 function diskStats() {
   if (isWindows) {
-    const disk = powershellJson("Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\" | Select-Object DeviceID,VolumeName,Size,FreeSpace");
-    const totalBytes = Number(disk?.Size || 0);
-    const freeBytes = Number(disk?.FreeSpace || 0);
-    const usedBytes = Math.max(0, totalBytes - freeBytes);
-    const name = `${disk?.VolumeName || "Windows"} (${disk?.DeviceID || "C:"})`;
-    return { name, totalBytes, usedBytes, freeBytes, percent: totalBytes ? Number((usedBytes / totalBytes * 100).toFixed(1)) : 0 };
+    try {
+      const stats = fs.statfsSync("C:\\");
+      const totalBytes = Number(stats.blocks) * Number(stats.bsize);
+      const freeBytes = Number(stats.bavail) * Number(stats.bsize);
+      const usedBytes = Math.max(0, totalBytes - freeBytes);
+      return { name: "Windows (C:)", totalBytes, usedBytes, freeBytes, percent: totalBytes ? Number((usedBytes / totalBytes * 100).toFixed(1)) : 0 };
+    } catch {
+      return { name: "Windows (C:)", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 };
+    }
   }
 
   const lines = run("/bin/df", ["-k", "/System/Volumes/Data"]).split("\n");
@@ -245,17 +271,13 @@ function diskStats() {
 
 function batteryStats() {
   if (isWindows) {
-    const battery = powershellJson("Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus");
-    const percent = Number(battery?.EstimatedChargeRemaining || 0);
-    const status = Number(battery?.BatteryStatus || 0);
-    const state = status === 2 ? "Charging" : status === 1 ? "Discharging" : percent ? "Battery present" : "Unavailable";
     return {
-      percent,
-      state,
+      percent: 0,
+      state: "Desktop power",
       timeRemainingMinutes: null,
       cycleCount: 0,
-      healthPercent: percent ? 100 : 0,
-      condition: percent ? "Normal" : "Desktop power",
+      healthPercent: 0,
+      condition: "Desktop power",
       powerWatts: null,
     };
   }
@@ -328,22 +350,23 @@ function networkStats() {
 
 function processStats() {
   if (isWindows) {
-    const rows = powershellJson("Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } | Sort-Object PercentProcessorTime -Descending | Select-Object -First 12 Name,IDProcess,PercentProcessorTime,WorkingSet,ThreadCount");
-    const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
-    const processCount = Number(powershell("(Get-Process).Count") || list.length);
-    const items = list.map((item) => {
-      const cpu = Number(item.PercentProcessorTime || 0);
+    const rows = run("tasklist.exe", ["/fo", "csv", "/nh"], 3500).split("\n").map((line) => line.trim()).filter(Boolean);
+    const parsed = rows.map((line) => {
+      const [name, pid, , , memory] = parseCsvLine(line);
+      return { name: String(name || "Process").replace(/\.exe$/i, ""), pid: String(pid || ""), memoryBytes: memoryTextToBytes(memory) };
+    }).filter((item) => item.pid && item.name !== "System Idle Process");
+    const items = parsed.sort((a, b) => b.memoryBytes - a.memoryBytes).slice(0, 12).map((item) => {
       return {
-        pid: String(item.IDProcess || ""),
-        cpu,
-        memoryBytes: Number(item.WorkingSet || 0),
-        state: Number(item.ThreadCount || 0) > 0 ? "R" : "S",
-        name: String(item.Name || "Process"),
-        detail: Number(item.ThreadCount || 0) > 0 ? `${item.ThreadCount} threads` : "Background",
-        energy: cpu >= 15 ? "High" : cpu >= 5 ? "Medium" : "Low",
+        pid: item.pid,
+        cpu: 0,
+        memoryBytes: item.memoryBytes,
+        state: "R",
+        name: item.name,
+        detail: "Windows process",
+        energy: "Low",
       };
     });
-    return { total: processCount, running: items.filter((item) => item.state.startsWith("R")).length, items };
+    return { total: parsed.length, running: items.length, items };
   }
 
   const output = run("/bin/ps", ["-axo", "pid=,pcpu=,rss=,state=,comm="]);
@@ -442,6 +465,32 @@ function collectTelemetry() {
   };
 }
 
+function initialTelemetry() {
+  const memory = {
+    totalBytes: os.totalmem(),
+    usedBytes: Math.max(0, os.totalmem() - os.freemem()),
+    freeBytes: os.freemem(),
+    wiredBytes: 0,
+    compressedBytes: 0,
+    pressure: "Low",
+  };
+  return {
+    timestamp: new Date().toISOString(),
+    device: staticDevice,
+    cpu: cpuUsage(),
+    memory,
+    disk: { name: isWindows ? "Windows (C:)" : "Macintosh HD", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 },
+    battery: { percent: 0, state: "Starting", timeRemainingMinutes: null, cycleCount: 0, healthPercent: 0, condition: "Checking", powerWatts: null },
+    thermal: { status: "Normal", speedLimit: 100 },
+    network: { interface: "Starting", address: "Unavailable", downloadBytesPerSecond: 0, uploadBytesPerSecond: 0 },
+    uptimeSeconds: os.uptime(),
+    processes: { total: 0, running: 0, items: [] },
+    plex: isWindows
+      ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity." }
+      : { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows." },
+  };
+}
+
 function relayConfig() {
   try {
     const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
@@ -475,7 +524,7 @@ async function uploadTelemetry(snapshot) {
   }
 }
 
-let latestTelemetry = collectTelemetry();
+let latestTelemetry = initialTelemetry();
 let collecting = false;
 
 async function refreshTelemetry() {
