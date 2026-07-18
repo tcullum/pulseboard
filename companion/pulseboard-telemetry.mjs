@@ -463,8 +463,11 @@ function xmlAttrs(text) {
 }
 
 function plexPreferencesToken() {
+  if (isWindows) {
+    return powershell("(Get-ItemProperty -Path 'HKCU:\\Software\\Plex, Inc.\\Plex Media Server' -Name PlexOnlineToken -ErrorAction SilentlyContinue).PlexOnlineToken", 1500);
+  }
   const candidates = isWindows
-    ? [path.join(process.env.LOCALAPPDATA || "", "Plex Media Server", "Preferences.xml")]
+    ? []
     : [path.join(os.homedir(), "Library", "Application Support", "Plex Media Server", "Preferences.xml")];
   for (const candidate of candidates) {
     try {

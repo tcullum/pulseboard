@@ -61,6 +61,7 @@ test("surfaces Plex playback stream telemetry", async () => {
   assert.match(companion, /plexPlaybackTelemetry/);
   assert.match(companion, /\/status\/sessions/);
   assert.match(companion, /PlexOnlineToken/);
+  assert.match(companion, /HKCU:\\\\Software\\\\Plex, Inc\.\\\\Plex Media Server/);
   assert.match(companion, /X-Plex-Token/);
   assert.match(companion, /TranscodeSession/);
   assert.match(page, /plexNowPlaying/);
