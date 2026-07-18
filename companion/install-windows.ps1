@@ -5,6 +5,7 @@ $companionPath = Join-Path $scriptDir "pulseboard-telemetry.mjs"
 $node = Get-Command node -ErrorAction Stop
 $configDir = Join-Path $env:APPDATA "Pulseboard"
 $configPath = Join-Path $configDir "relay.json"
+$launcherPath = Join-Path $configDir "launch-hidden.vbs"
 $logDir = Join-Path $env:LOCALAPPDATA "Pulseboard\Logs"
 $taskName = "Pulseboard Companion"
 
@@ -19,7 +20,16 @@ if ($env:PULSEBOARD_RELAY_TOKEN -and $env:PULSEBOARD_SIWC_TOKEN) {
   Set-Content -Path $configPath -Value $config -Encoding UTF8
 }
 
-$action = New-ScheduledTaskAction -Execute $node.Source -Argument "`"$companionPath`"" -WorkingDirectory $scriptDir
+$launcher = @"
+Option Explicit
+Dim shell, command
+Set shell = CreateObject("WScript.Shell")
+command = """" & "$($node.Source)" & """" & " " & """" & "$companionPath" & """"
+WScript.Quit shell.Run(command, 0, True)
+"@
+Set-Content -Path $launcherPath -Value $launcher -Encoding ASCII
+
+$action = New-ScheduledTaskAction -Execute "$env:WINDIR\System32\wscript.exe" -Argument "//B //Nologo `"$launcherPath`"" -WorkingDirectory $scriptDir
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 
