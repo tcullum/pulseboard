@@ -52,6 +52,8 @@ const IPERF3_SERVERS_URL = "http://127.0.0.1:4319/iperf3/servers";
 const IPERF3_TEST_URL = "http://127.0.0.1:4319/iperf3/test";
 const WINDOWS_PLEX_ID = "windows-win-plex";
 const MACBOOK_ID = "device-thomas-s-macbook-pro";
+const LOCAL_TELEMETRY_TIMEOUT_MS = 6_500;
+const OFFLINE_AFTER_MISSED_POLLS = 3;
 const SPEED_PHASE_MS = 12_000;
 const SPEED_RAMP_UP_MS = 2_000;
 // If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
@@ -283,6 +285,8 @@ export default function Home() {
   const [selectedDeviceId, setSelectedDeviceId] = useState(WINDOWS_PLEX_ID);
   const [relayDevices, setRelayDevices] = useState<TelemetryDevice[]>([]);
   const fetchInFlight = useRef<Promise<void> | null>(null);
+  const missedTelemetryPolls = useRef(0);
+  const lastGoodTelemetry = useRef<Telemetry | null>(null);
   const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
   const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
   const [speedPartial, setSpeedPartial] = useState<Partial<SpeedResult>>({});
@@ -311,12 +315,14 @@ export default function Home() {
 
     const request = (async () => {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 1000);
+      const timeout = window.setTimeout(() => controller.abort(), LOCAL_TELEMETRY_TIMEOUT_MS);
       try {
         const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
         if (!response.ok) throw new Error("Companion unavailable");
         const next = await response.json() as Telemetry;
         if (!selectedMatchesTelemetry(selectedDeviceId, next)) throw new Error("Different local companion");
+        missedTelemetryPolls.current = 0;
+        lastGoodTelemetry.current = next;
         setTelemetry(next);
         setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
         setStatus("live");
@@ -340,12 +346,20 @@ export default function Home() {
           const relay = await relayResponse.json() as { telemetry?: Telemetry; devices?: TelemetryDevice[]; ageSeconds?: number; stale?: boolean };
           if (relay.devices) setRelayDevices(relay.devices);
           if (!relayResponse.ok || !relay.telemetry) throw new Error("Relay unavailable");
+          missedTelemetryPolls.current = 0;
+          lastGoodTelemetry.current = relay.telemetry;
           setTelemetry(relay.telemetry);
           setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
           setStatus("live");
           setTransport("relay");
           setRelayAgeSeconds(relay.ageSeconds || 0);
         } catch {
+          missedTelemetryPolls.current += 1;
+          const cached = lastGoodTelemetry.current;
+          if (cached && selectedMatchesTelemetry(selectedDeviceId, cached) && missedTelemetryPolls.current < OFFLINE_AFTER_MISSED_POLLS) {
+            setStatus("live");
+            return;
+          }
           setStatus("offline");
           setTransport(null);
         }
@@ -759,6 +773,8 @@ export default function Home() {
 
   useEffect(() => {
     window.localStorage.setItem("pulseboard-device", selectedDeviceId);
+    missedTelemetryPolls.current = 0;
+    lastGoodTelemetry.current = null;
   }, [selectedDeviceId]);
 
   useEffect(() => {
