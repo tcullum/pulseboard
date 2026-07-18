@@ -72,6 +72,14 @@ type TelemetryDevice = {
   eyebrow?: string;
 };
 
+type FleetSnapshot = {
+  telemetry?: Telemetry;
+  status: "live" | "offline";
+  transport: "direct" | "relay";
+  ageSeconds: number;
+  stale: boolean;
+};
+
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const WINDOWS_PLEX_ID = "windows-win-plex";
 const MACBOOK_ID = "device-thomas-s-macbook-pro";
@@ -163,13 +171,55 @@ export default function Home() {
   const [theme, setTheme] = useState<"night" | "day">("night");
   const [selectedDeviceId, setSelectedDeviceId] = useState(WINDOWS_PLEX_ID);
   const [relayDevices, setRelayDevices] = useState<TelemetryDevice[]>([]);
+  const [fleetSnapshots, setFleetSnapshots] = useState<Record<string, FleetSnapshot>>({});
   const fetchInFlight = useRef<Promise<void> | null>(null);
+  const fleetFetchId = useRef(0);
   const missedTelemetryPolls = useRef(0);
   const lastGoodTelemetry = useRef<Telemetry | null>(null);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
     document.getElementById(target)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  const refreshFleetSnapshots = useCallback((devices: TelemetryDevice[]) => {
+    const targets = devices.filter((device, index, list) => device.id && list.findIndex((item) => item.id === device.id) === index).slice(0, 3);
+    if (!targets.length) return;
+    const requestId = ++fleetFetchId.current;
+    void Promise.all(targets.map(async (device) => {
+      try {
+        const response = await fetch(`/api/telemetry?device=${encodeURIComponent(device.id)}`, { cache: "no-store", credentials: "same-origin" });
+        const relay = await response.json() as { telemetry?: Telemetry; ageSeconds?: number; stale?: boolean };
+        if (!response.ok || !relay.telemetry) throw new Error("No relay telemetry");
+        return {
+          id: device.id,
+          snapshot: {
+            telemetry: relay.telemetry,
+            status: relay.stale ? "offline" as const : "live" as const,
+            transport: "relay" as const,
+            ageSeconds: relay.ageSeconds || device.ageSeconds || 0,
+            stale: Boolean(relay.stale),
+          },
+        };
+      } catch {
+        return {
+          id: device.id,
+          snapshot: {
+            status: "offline" as const,
+            transport: "relay" as const,
+            ageSeconds: device.ageSeconds || 0,
+            stale: true,
+          },
+        };
+      }
+    })).then((results) => {
+      if (requestId !== fleetFetchId.current) return;
+      setFleetSnapshots((current) => {
+        const next = { ...current };
+        for (const result of results) next[result.id] = result.snapshot;
+        return next;
+      });
+    }).catch(() => {});
   }, []);
 
   const fetchTelemetry = useCallback(() => {
@@ -194,10 +244,17 @@ export default function Home() {
           const local = { id: deviceId(next), name: next.device.name, platform: next.device.platform || "macos", os: next.device.os, chip: next.device.chip, ageSeconds: 0, stale: false };
           return [local, ...devices.filter((device) => device.id !== local.id)];
         });
+        setFleetSnapshots((current) => ({
+          ...current,
+          [deviceId(next)]: { telemetry: next, status: "live", transport: "direct", ageSeconds: 0, stale: false },
+        }));
         void fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" })
           .then(async (relayResponse) => {
             const relay = await relayResponse.json() as { devices?: TelemetryDevice[] };
-            if (relay.devices) setRelayDevices((devices) => [...devices, ...relay.devices!].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index));
+            if (relay.devices) {
+              setRelayDevices((devices) => [...devices, ...relay.devices!].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index));
+              refreshFleetSnapshots(relay.devices);
+            }
           })
           .catch(() => {});
         return;
@@ -206,8 +263,21 @@ export default function Home() {
           const relayUrl = `/api/telemetry?device=${encodeURIComponent(selectedDeviceId)}`;
           const relayResponse = await fetch(relayUrl, { cache: "no-store", credentials: "same-origin" });
           const relay = await relayResponse.json() as { telemetry?: Telemetry; devices?: TelemetryDevice[]; ageSeconds?: number; stale?: boolean };
-          if (relay.devices) setRelayDevices(relay.devices);
+          if (relay.devices) {
+            setRelayDevices(relay.devices);
+            refreshFleetSnapshots(relay.devices);
+          }
           if (!relayResponse.ok || !relay.telemetry) throw new Error("Relay unavailable");
+          setFleetSnapshots((current) => ({
+            ...current,
+            [deviceId(relay.telemetry!)]: {
+              telemetry: relay.telemetry,
+              status: relay.stale ? "offline" : "live",
+              transport: "relay",
+              ageSeconds: relay.ageSeconds || 0,
+              stale: Boolean(relay.stale),
+            },
+          }));
           if (relay.stale) {
             setRelayAgeSeconds(relay.ageSeconds || 0);
             setTransport("relay");
@@ -241,7 +311,7 @@ export default function Home() {
       if (fetchInFlight.current === request) fetchInFlight.current = null;
     });
     return request;
-  }, [selectedDeviceId]);
+  }, [refreshFleetSnapshots, selectedDeviceId]);
 
   /* Legacy speed-test implementation removed from the interface.
   const runSpeedTest = useCallback(async () => {
@@ -678,6 +748,13 @@ export default function Home() {
     { ...(macRelay || { id: MACBOOK_ID, name: "Thomas's MacBook Pro", platform: "macos", os: "macOS", chip: "" }), displayName: "Thomas's MacBook Pro", eyebrow: "MacBook" },
     ...relayDevices.filter((device) => !isWindowsClient(device) && !isMacBookClient(device)).map((device) => ({ ...device, displayName: clientDisplayName(device), eyebrow: clientEyebrow(device) })),
   ].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index);
+  const fleetSlots = deviceOptions.slice(0, 3);
+  const fleetPlaceholders = Array.from({ length: Math.max(0, 3 - fleetSlots.length) }, (_, index) => ({ id: `add-machine-${index + 1}`, displayName: "Add machine", eyebrow: "Available slot", platform: "slot", os: "Install Pulseboard Companion", chip: "", ageSeconds: 0, stale: true }));
+  const fleetCards = [...fleetSlots, ...fleetPlaceholders];
+  const liveFleetCount = fleetSlots.filter((device) => {
+    const snapshot = fleetSnapshots[device.id];
+    return snapshot?.status === "live" && !snapshot.stale;
+  }).length;
   return (
     <main className={`shell ${theme === "day" ? "themeDay" : ""}`}>
       <aside className="rail" aria-label="System views">
@@ -725,8 +802,51 @@ export default function Home() {
             </section>
           )}
 
-          <section className="headingRow scrollTarget" id="overview">
-            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from the selected machine.</p></div>
+          <section className="fleetOverview scrollTarget" id="overview" aria-labelledby="fleet-title">
+            <div className="fleetHeader">
+              <div><p className="eyebrow">FLEET OVERVIEW</p><h1 id="fleet-title">Pulseboard fleet</h1><p className="subhead">{liveFleetCount} of {fleetSlots.length} machines live · up to 3 dashboard slots</p></div>
+              <div className="fleetLegend"><span><i /> Live telemetry</span><span><i className="offline" /> Needs attention</span></div>
+            </div>
+            <div className="fleetGrid" aria-label="Machine dashboards">
+              {fleetCards.map((device) => {
+                const isPlaceholder = device.platform === "slot";
+                const selected = selectedDeviceId === device.id;
+                const selectedFallback: FleetSnapshot | null = telemetry && selected
+                  ? { telemetry, status: status === "live" ? "live" : "offline", transport: transport || "relay", ageSeconds: relayAgeSeconds, stale: status === "offline" }
+                  : null;
+                const snapshot = isPlaceholder ? null : fleetSnapshots[device.id] || selectedFallback;
+                const machine = snapshot?.telemetry;
+                const memoryPercent = machine?.memory.totalBytes ? Math.round(machine.memory.usedBytes / machine.memory.totalBytes * 100) : 0;
+                const diskPercent = machine?.disk.percent || 0;
+                const online = snapshot?.status === "live" && !snapshot.stale;
+                if (isPlaceholder) {
+                  return (
+                    <article className="fleetCard addMachine" key={device.id}>
+                      <div className="fleetCardTop"><div><span>{device.eyebrow}</span><b>{device.displayName}</b></div><i>Ready</i></div>
+                      <p>Install the companion on another computer and it will appear here automatically.</p>
+                      <div className="fleetAddGlyph">+</div>
+                    </article>
+                  );
+                }
+                return (
+                  <button className={`fleetCard ${selected ? "selected" : ""} ${online ? "live" : "offline"}`} key={device.id} onClick={() => { setStatus("connecting"); setSelectedDeviceId(device.id); }}>
+                    <div className="fleetCardTop"><div><span>{device.eyebrow}</span><b>{device.displayName}</b></div><i>{online ? "Live" : "Offline"}</i></div>
+                    <p>{machine ? `${machine.device.os} · ${machine.device.chip}` : device.os || "Waiting for companion"}</p>
+                    <div className="fleetVitals">
+                      <div><span>CPU</span><b>{machine ? `${machine.cpu.usage.toFixed(1)}%` : "—"}</b></div>
+                      <div><span>Memory</span><b>{machine ? `${memoryPercent}%` : "—"}</b></div>
+                      <div><span>Disk</span><b>{machine ? `${diskPercent}%` : "—"}</b></div>
+                    </div>
+                    <div className="fleetBars" aria-hidden="true"><i style={{ width: `${machine?.cpu.usage || 0}%` }} /><b style={{ width: `${memoryPercent}%` }} /><em style={{ width: `${diskPercent}%` }} /></div>
+                    <div className="fleetFooter"><span>{snapshot?.transport === "direct" ? "Direct local" : "Encrypted relay"}</span><span>{snapshot ? `${snapshot.ageSeconds}s sample` : "No sample"}</span></div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="headingRow scrollTarget" id="selected-machine">
+            <div><p className="eyebrow">SELECTED MACHINE</p><h1>{headline}</h1><p className="subhead">Detailed performance and health from {activeDisplayName}.</p></div>
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 

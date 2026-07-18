@@ -12,6 +12,7 @@ test("recovers telemetry when a suspended mobile tab resumes", async () => {
   assert.match(page, /addEventListener\("online"/);
   assert.match(page, /addEventListener\("offline"/);
   assert.match(page, /fetchInFlight\.current/);
+  assert.match(page, /refreshFleetSnapshots/);
   assert.match(page, /cache: "no-store"/);
 });
 
@@ -70,4 +71,20 @@ test("surfaces Plex playback stream telemetry", async () => {
   assert.match(page, /bandwidthKbps/);
   assert.match(windowsInstaller, /PLEX_TOKEN/);
   assert.match(macInstaller, /PLEX_TOKEN/);
+});
+
+test("renders a three-slot fleet dashboard above machine details", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+
+  assert.match(page, /Pulseboard fleet/);
+  assert.match(page, /fleetSnapshots/);
+  assert.match(page, /fleetPlaceholders/);
+  assert.match(page, /up to 3 dashboard slots/);
+  assert.match(page, /SELECTED MACHINE/);
+  assert.match(css, /\.fleetGrid/);
+  assert.match(css, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/);
+  assert.match(css, /\.addMachine/);
 });

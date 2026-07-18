@@ -58,6 +58,38 @@ button:focus-visible { outline:2px solid var(--cyan); outline-offset:3px; }
 h1 { font-size:29px; letter-spacing:-.035em; margin:0 0 7px; font-weight:650; }
 .subhead { margin:0; font-size:13px; color:var(--muted); }
 .updated { color:#839db1; font:500 10px var(--font-geist-mono),monospace; }
+.fleetOverview { margin-bottom:28px; }
+.fleetHeader { display:flex; align-items:flex-end; justify-content:space-between; gap:18px; margin-bottom:14px; }
+.fleetHeader h1 { margin-bottom:7px; }
+.fleetLegend { display:flex; gap:10px; color:#7892a6; font-size:9px; }
+.fleetLegend span { display:flex; align-items:center; gap:6px; white-space:nowrap; }
+.fleetLegend i { width:7px; height:7px; border-radius:50%; background:var(--green); box-shadow:0 0 8px rgba(94,230,168,.55); }
+.fleetLegend i.offline { background:#e87878; box-shadow:0 0 8px rgba(232,120,120,.45); }
+.fleetGrid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
+.fleetCard { min-height:184px; min-width:0; padding:16px; border:1px solid var(--line); border-radius:16px; background:#0b1928; color:inherit; text-align:left; display:grid; grid-template-rows:auto minmax(34px,auto) auto auto auto; gap:11px; box-shadow:0 18px 45px rgba(0,0,0,.08); }
+button.fleetCard { cursor:pointer; transition:border-color .16s ease,background .16s ease,transform .16s ease; }
+button.fleetCard:hover { transform:translateY(-1px); border-color:#315570; background:#0e1f31; }
+.fleetCard.selected { border-color:rgba(57,217,230,.55); box-shadow:0 0 0 1px rgba(57,217,230,.16),0 18px 45px rgba(0,0,0,.08); }
+.fleetCard.offline { border-color:#4a3340; }
+.fleetCardTop { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; min-width:0; }
+.fleetCardTop div { min-width:0; display:grid; gap:4px; }
+.fleetCardTop span { color:var(--muted); font:650 8px var(--font-geist-mono),monospace; text-transform:uppercase; letter-spacing:.09em; }
+.fleetCardTop b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#eef6ff; font-size:15px; font-weight:750; }
+.fleetCardTop i { padding:5px 7px; border-radius:999px; background:rgba(94,230,168,.08); color:var(--green); font-style:normal; font-size:9px; font-weight:800; }
+.fleetCard.offline .fleetCardTop i { background:rgba(232,120,120,.08); color:#ee9b9b; }
+.fleetCard p { margin:0; color:#7f98aa; font-size:10px; line-height:1.45; min-width:0; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.fleetVitals { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.fleetVitals div { min-width:0; padding:9px; border:1px solid rgba(126,152,173,.16); border-radius:9px; background:#081522; display:grid; gap:5px; }
+.fleetVitals span { color:#6e889b; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.fleetVitals b { color:#dce8f1; font:650 15px var(--font-geist-mono),monospace; }
+.fleetBars { display:grid; gap:5px; }
+.fleetBars i,.fleetBars b,.fleetBars em { display:block; height:5px; min-width:2px; max-width:100%; border-radius:999px; }
+.fleetBars i { background:var(--cyan); }.fleetBars b { background:var(--violet); }.fleetBars em { background:var(--amber); }
+.fleetFooter { display:flex; justify-content:space-between; gap:10px; color:#6d879b; font:600 9px var(--font-geist-mono),monospace; }
+.fleetFooter span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.addMachine { border-style:dashed; background:#091624; color:#7892a6; }
+.addMachine .fleetCardTop i { background:rgba(57,217,230,.08); color:var(--cyan); }
+.fleetAddGlyph { width:38px; height:38px; display:grid; place-items:center; border:1px solid #24485d; border-radius:11px; color:var(--cyan); font:700 21px var(--font-geist-mono),monospace; }
 .dot { display:inline-block; width:7px; height:7px; background:var(--green); border-radius:50%; margin-right:8px; box-shadow:0 0 9px rgba(94,230,168,.65); animation:pulse 2s infinite; }
 .dot.paused { background:var(--amber); animation:none; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:17px; box-shadow:0 18px 45px rgba(0,0,0,.10); }
@@ -193,6 +225,12 @@ h1 { font-size:29px; letter-spacing:-.035em; margin:0 0 7px; font-weight:650; }
 .themeDay .ipAddress span { color:var(--cyan); background:#e2f2f4; }.themeDay .ipAddress code { color:#075e6b; }
 .themeDay .memoryBar,.themeDay .storageBar { background:#e8eef2; }
 .themeDay .memoryLegend b,.themeDay .fanRow b,.themeDay .storageFacts b { color:#38515f; }
+.themeDay .fleetCard { background:#f9fbfc; box-shadow:0 8px 24px rgba(38,63,78,.04); }
+.themeDay button.fleetCard:hover { background:#fff; border-color:#bbd5df; }
+.themeDay .fleetCard.selected { border-color:#38b9c4; box-shadow:0 0 0 1px rgba(57,217,230,.16),0 8px 24px rgba(38,63,78,.04); }
+.themeDay .fleetCardTop b,.themeDay .fleetVitals b { color:#2a3d48; }
+.themeDay .fleetVitals div { background:#fff; }
+.themeDay .addMachine { background:#f3f8fa; }
 .themeDay .plexCard { background:#fff; }
 .themeDay .plexStats div,.themeDay .plexSession { background:#f7fafb; }
 .themeDay .plexStats b,.themeDay .plexSessionTop b { color:#2a3d48; }
@@ -205,6 +243,6 @@ h1 { font-size:29px; letter-spacing:-.035em; margin:0 0 7px; font-weight:650; }
 .themeDay .batteryIcon { border-color:#8ca0ac; }.themeDay .batteryIcon:after { background:#8ca0ac; }
 .themeDay .speedUnitToggle { background:#f2f6f8; }.themeDay .speedUnitToggle button.selected { background:#fff; color:#244b5a; box-shadow:0 1px 5px rgba(37,67,82,.1); }.themeDay .speedServerSelect,.themeDay .speedCustomInput { background:#f9fbfc; }.themeDay .speedServerSelect select,.themeDay .speedCustomInput { color:#2a3d48; }.themeDay .dialArc:after,.themeDay .speedPhases span { background:#fff; }.themeDay .dialTick { color:#566f7f; }.themeDay .speedMetric { background:#f7fafb; }.themeDay .speedMetric span,.themeDay .speedMetric b,.themeDay .speedEndpoint b { color:#2a3d48; }.themeDay .speedMetric.featured { background:#edf8f3; }.themeDay .speedAction { background:#edf8f3; color:#16835b; }.themeDay .speedAction.testing { border-color:#e1c9bf; background:#fff5f0; color:#9a5d49; }
 .themeDay .modalBackdrop { background:rgba(74,94,106,.28); }.themeDay .settingsPanel { background:#f8fafb; box-shadow:-24px 0 70px rgba(38,63,78,.14); }.themeDay .closeButton,.themeDay .refreshChoices button { background:#fff; }.themeDay .refreshChoices button { color:#526b7b; }.themeDay .refreshChoices button span,.themeDay .settingGroup>div:first-child>span { color:#587383; }.themeDay .refreshChoices button.selected { border-color:#73aeb7; background:#eaf6f7; }.themeDay .connectionPill { border-color:#c7e2d7; background:#edf8f3; color:#32725b; }.themeDay .settingsAction { border-color:#bfd9de; background:#fff; }.themeDay .privacyNote { border-color:#c7e2d7; background:#edf8f3; }.themeDay .privacyNote span { color:#557d6e; }
-@media(max-width:1100px){.topbar{gap:12px}.clientSwitch{max-width:300px}.metricsGrid{grid-template-columns:1fr 1fr}.thermalCard{grid-column:span 2}.quickGrid{grid-template-columns:1fr 1fr}.lowerGrid{grid-template-columns:1fr}.sideStack{grid-template-columns:1fr 1fr}.history{grid-template-columns:140px 1fr 150px}.statusGrid{grid-template-columns:1fr 1fr}.statusGrid .statusCard:last-child{grid-column:span 2}}
-@media(max-width:720px){.rail{width:68px;padding-inline:8px}.workspace{width:calc(100% - 68px);margin-left:68px}.railButton span:last-child{display:none}.topbar{height:auto;min-height:68px;padding:12px 16px;display:grid;grid-template-columns:1fr auto}.clientSwitch{grid-column:1 / -1;order:3;width:100%;max-width:none;min-width:0}.clientSwitch button{min-width:112px}.deviceLockup span,.health,.iconButton{display:none}.content{padding:24px 16px}.connectionBanner{grid-template-columns:auto 1fr}.connectionBanner button{grid-column:2;justify-self:start}.headingRow{align-items:flex-start;gap:15px}.updated{display:none}h1{font-size:25px}.metricsGrid,.quickGrid,.lowerGrid,.sideStack,.statusGrid{grid-template-columns:1fr}.thermalCard{grid-column:auto}.quickGrid{gap:10px}.history{grid-template-columns:1fr;gap:14px}.historySummary{border-left:0;border-top:1px solid var(--line);padding:12px 0 0}.statusGrid .statusCard:last-child{grid-column:auto}.processCard{overflow-x:auto}.topActions{margin-left:8px}.pauseButton{white-space:nowrap;padding-inline:9px}.themeButton{width:34px;padding:0;justify-content:center}.themeButton b{display:none}.storageLegend{grid-template-columns:1fr}.batteryFacts,.plexStats{gap:8px}footer{display:grid;gap:7px}}
+@media(max-width:1100px){.topbar{gap:12px}.clientSwitch{max-width:300px}.fleetGrid{grid-template-columns:1fr}.fleetCard{min-height:158px}.metricsGrid{grid-template-columns:1fr 1fr}.thermalCard{grid-column:span 2}.quickGrid{grid-template-columns:1fr 1fr}.lowerGrid{grid-template-columns:1fr}.sideStack{grid-template-columns:1fr 1fr}.history{grid-template-columns:140px 1fr 150px}.statusGrid{grid-template-columns:1fr 1fr}.statusGrid .statusCard:last-child{grid-column:span 2}}
+@media(max-width:720px){.rail{width:68px;padding-inline:8px}.workspace{width:calc(100% - 68px);margin-left:68px}.railButton span:last-child{display:none}.topbar{height:auto;min-height:68px;padding:12px 16px;display:grid;grid-template-columns:1fr auto}.clientSwitch{grid-column:1 / -1;order:3;width:100%;max-width:none;min-width:0}.clientSwitch button{min-width:112px}.deviceLockup span,.health,.iconButton{display:none}.content{padding:24px 16px}.connectionBanner{grid-template-columns:auto 1fr}.connectionBanner button{grid-column:2;justify-self:start}.fleetHeader{align-items:flex-start;display:grid}.fleetLegend{flex-wrap:wrap}.fleetCard{min-height:172px}.fleetVitals{gap:6px}.fleetVitals div{padding:8px 7px}.fleetVitals b{font-size:13px}.headingRow{align-items:flex-start;gap:15px}.updated{display:none}h1{font-size:25px}.metricsGrid,.quickGrid,.lowerGrid,.sideStack,.statusGrid{grid-template-columns:1fr}.thermalCard{grid-column:auto}.quickGrid{gap:10px}.history{grid-template-columns:1fr;gap:14px}.historySummary{border-left:0;border-top:1px solid var(--line);padding:12px 0 0}.statusGrid .statusCard:last-child{grid-column:auto}.processCard{overflow-x:auto}.topActions{margin-left:8px}.pauseButton{white-space:nowrap;padding-inline:9px}.themeButton{width:34px;padding:0;justify-content:center}.themeButton b{display:none}.storageLegend{grid-template-columns:1fr}.batteryFacts,.plexStats{gap:8px}footer{display:grid;gap:7px}}
 @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation:none!important;transition:none!important}}
