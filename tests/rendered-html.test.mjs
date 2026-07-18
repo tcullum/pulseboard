@@ -30,63 +30,21 @@ test("detects missing styles and prevents stale application shells", async () =>
   assert.match(worker, /no-cache, no-store, max-age=0, must-revalidate/);
 });
 
-test("includes a real, cancellable connection speed test", async () => {
-  const [page, route, companion] = await Promise.all([
+test("keeps the dashboard focused on trustworthy telemetry", async () => {
+  const [page, companion] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
-    readFile(new URL("app/api/speed-test/route.ts", root), "utf8"),
     readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
   ]);
 
-  assert.match(page, /id="tools"/);
-  assert.match(page, /Connection speed test/);
-  assert.match(page, /Jitter/);
-  assert.match(page, /Loaded/);
-  assert.match(page, /SPEED_SCALE_MAX_MBPS\s*=\s*3000/);
-  assert.match(page, /formatSpeed/);
-  assert.match(page, /formatTick/);
-  assert.match(page, /tickPosition/);
-  assert.match(page, /Auto nearest edge/);
-  assert.match(page, /Local companion/);
-  assert.match(page, /Custom endpoint/);
-  assert.match(page, /Public iPerf3 server/);
-  assert.match(page, /IPERF3_TEST_URL/);
-  assert.match(page, /us-los-angeles-leaseweb-26/);
-  assert.match(page, /pulseboard-iperf3-server/);
-  assert.match(page, /Remote control is intentionally disabled/);
-  assert.match(page, /LOCAL_SPEED_TEST_URL/);
-  assert.match(page, /speedTestUrl/);
-  assert.match(page, /normalizeSpeedBase/);
-  assert.match(page, /speedServerHelp/);
-  assert.match(page, /HTTPS and CORS enabled/);
-  assert.match(page, /server\.example or https:\/\/server\.example\/speed-test/);
-  assert.match(page, /pulseboard-speed-unit/);
-  assert.match(page, /pulseboard-speed-custom-url/);
-  assert.match(page, /speedMeta/);
-  assert.match(page, /SPEED_PHASE_MS/);
-  assert.match(page, /SPEED_STREAMS/);
-  assert.match(page, /response\.body\.getReader/);
-  assert.match(page, /XMLHttpRequest/);
-  assert.match(page, /trimmedMean/);
-  assert.match(page, /speedTestController\.current\.abort/);
-  assert.match(page, /performance\.now\(\)/);
-  assert.match(route, /export async function GET/);
-  assert.match(route, /export async function POST/);
-  assert.match(route, /mode"\) === "meta"/);
-  assert.match(route, /cf-connecting-ip/);
-  assert.match(route, /cf-ipcountry/);
-  assert.match(route, /new ReadableStream/);
-  assert.match(route, /getReader/);
-  assert.match(route, /MAX_TRANSFER_BYTES/);
-  assert.match(route, /crypto\.getRandomValues/);
-  assert.match(companion, /\/speed-test/);
-  assert.match(companion, /GET, POST, OPTIONS/);
-  assert.match(companion, /Content-Encoding/);
-  assert.match(companion, /request\.on\("data"/);
-  assert.match(companion, /randomFillSync/);
-  assert.match(companion, /findIperf3/);
-  assert.match(companion, /\/iperf3\/servers/);
-  assert.match(companion, /\/iperf3\/test/);
-  assert.match(companion, /IPERF3_SERVERS/);
-  assert.match(companion, /spawnText/);
-  assert.match(companion, /Choose one of the allowlisted North America iPerf3 servers/);
+  const visiblePage = page.replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
+  assert.doesNotMatch(visiblePage, /Connection speed test/);
+  assert.doesNotMatch(visiblePage, /id="tools"/);
+  assert.match(visiblePage, /TELEMETRY QUALITY/);
+  assert.match(visiblePage, /MEMORY HEADROOM/);
+  assert.match(visiblePage, /NETWORK IDENTITY/);
+  assert.match(visiblePage, /sample age/);
+  assert.match(visiblePage, /available === false/);
+  assert.match(companion, /loadAverage/);
+  assert.match(companion, /Win32_PerfFormattedData_PerfProc_Process/);
+  assert.match(companion, /thermalStats/);
 });

@@ -272,6 +272,7 @@ function diskStats() {
 function batteryStats() {
   if (isWindows) {
     return {
+      available: false,
       percent: 0,
       state: "Desktop power",
       timeRemainingMinutes: null,
@@ -294,6 +295,7 @@ function batteryStats() {
   const healthPercent = design ? Math.min(100, Math.round(full / design * 100)) : 100;
   const systemLoad = Number(ioreg.match(/"SystemLoad"\s*=\s*(\d+)/)?.[1] || 0);
   return {
+    available: true,
     percent,
     state: state[0]?.toUpperCase() + state.slice(1),
     timeRemainingMinutes,
@@ -306,13 +308,13 @@ function batteryStats() {
 
 function thermalStats() {
   if (isWindows) {
-    return { status: "Normal", speedLimit: 100 };
+    return { available: false, status: "Unavailable", speedLimit: 100 };
   }
 
   const output = run("/usr/bin/pmset", ["-g", "therm"]);
   const warning = /warning level/i.test(output) && !/No thermal warning/i.test(output);
   const speedLimit = Number(output.match(/CPU_Speed_Limit\s*=\s*(\d+)/)?.[1] || 100);
-  return { status: warning ? "Elevated" : "Normal", speedLimit };
+  return { available: true, status: warning ? "Elevated" : "Normal", speedLimit };
 }
 
 function networkStats() {
@@ -350,23 +352,33 @@ function networkStats() {
 
 function processStats() {
   if (isWindows) {
-    const rows = run("tasklist.exe", ["/fo", "csv", "/nh"], 3500).split("\n").map((line) => line.trim()).filter(Boolean);
-    const parsed = rows.map((line) => {
-      const [name, pid, , , memory] = parseCsvLine(line);
-      return { name: String(name || "Process").replace(/\.exe$/i, ""), pid: String(pid || ""), memoryBytes: memoryTextToBytes(memory) };
-    }).filter((item) => item.pid && item.name !== "System Idle Process");
-    const items = parsed.sort((a, b) => b.memoryBytes - a.memoryBytes).slice(0, 12).map((item) => {
+    const perf = powershellJson("Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction SilentlyContinue | Where-Object { $_.IDProcess -gt 0 -and $_.Name -notin @('_Total','Idle') } | Select-Object Name,IDProcess,PercentProcessorTime,WorkingSetPrivate");
+    const perfRows = Array.isArray(perf) ? perf : perf ? [perf] : [];
+    const rows = perfRows.map((item) => ({
+      name: String(item?.Name || "Process"),
+      pid: String(item?.IDProcess || ""),
+      cpu: Number(item?.PercentProcessorTime || 0),
+      memoryBytes: Number(item?.WorkingSetPrivate || 0),
+    })).filter((item) => item.pid && item.name !== "_Total" && item.name !== "Idle");
+    if (!rows.length) {
+      const fallbackRows = run("tasklist.exe", ["/fo", "csv", "/nh"], 3500).split("\n").map((line) => line.trim()).filter(Boolean);
+      rows.push(...fallbackRows.map((line) => {
+        const [name, pid, , , memory] = parseCsvLine(line);
+        return { name: String(name || "Process").replace(/\.exe$/i, ""), pid: String(pid || ""), cpu: 0, memoryBytes: memoryTextToBytes(memory) };
+      }).filter((item) => item.pid && item.name !== "System Idle Process"));
+    }
+    const items = rows.sort((a, b) => b.cpu - a.cpu || b.memoryBytes - a.memoryBytes).slice(0, 12).map((item) => {
       return {
         pid: item.pid,
-        cpu: 0,
+        cpu: Number(item.cpu.toFixed(1)),
         memoryBytes: item.memoryBytes,
-        state: "R",
+        state: item.cpu > 0 ? "R" : "S",
         name: item.name,
-        detail: "Windows process",
-        energy: "Low",
+        detail: item.cpu > 0 ? "Running" : "Background",
+        energy: item.cpu >= 15 ? "High" : item.cpu >= 5 ? "Medium" : "Low",
       };
     });
-    return { total: parsed.length, running: items.length, items };
+    return { total: rows.length, running: rows.filter((item) => item.cpu > 0).length, items };
   }
 
   const output = run("/bin/ps", ["-axo", "pid=,pcpu=,rss=,state=,comm="]);
@@ -459,6 +471,7 @@ function collectTelemetry() {
     battery: batteryStats(),
     thermal: thermalStats(),
     network: networkStats(),
+    system: { loadAverage: isWindows ? [] : os.loadavg().map((value) => Number(value.toFixed(2))) },
     uptimeSeconds: os.uptime(),
     processes,
     plex: plexStats(processes),
@@ -480,9 +493,10 @@ function initialTelemetry() {
     cpu: cpuUsage(),
     memory,
     disk: { name: isWindows ? "Windows (C:)" : "Macintosh HD", totalBytes: 0, usedBytes: 0, freeBytes: 0, percent: 0 },
-    battery: { percent: 0, state: "Starting", timeRemainingMinutes: null, cycleCount: 0, healthPercent: 0, condition: "Checking", powerWatts: null },
-    thermal: { status: "Normal", speedLimit: 100 },
+    battery: { available: !isWindows, percent: 0, state: "Starting", timeRemainingMinutes: null, cycleCount: 0, healthPercent: 0, condition: "Checking", powerWatts: null },
+    thermal: { available: !isWindows, status: isWindows ? "Unavailable" : "Normal", speedLimit: 100 },
     network: { interface: "Starting", address: "Unavailable", downloadBytesPerSecond: 0, uploadBytesPerSecond: 0 },
+    system: { loadAverage: isWindows ? [] : os.loadavg().map((value) => Number(value.toFixed(2))) },
     uptimeSeconds: os.uptime(),
     processes: { total: 0, running: 0, items: [] },
     plex: isWindows
@@ -551,6 +565,8 @@ function corsHeaders(origin) {
   };
 }
 
+// Retained for compatibility with older companion binaries; the dashboard no longer exposes speed tests.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function handleSpeedTest(request, response, headers, url) {
   if (request.method === "GET" && url.searchParams.get("mode") === "meta") {
     response.writeHead(200, { "Content-Type": "application/json", ...headers });
@@ -702,6 +718,8 @@ function readJsonBody(request, maxBytes = 32 * 1024) {
   });
 }
 
+// Retained for compatibility with older companion binaries; the dashboard no longer exposes speed tests.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function handleIperf3(request, response, headers, url) {
   const binary = findIperf3();
   if (request.method === "GET" && url.pathname === "/iperf3/servers") {
@@ -779,15 +797,6 @@ const server = http.createServer((request, response) => {
   if (origin && !ALLOWED_ORIGINS.has(origin)) {
     response.writeHead(403, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify({ error: "Origin not allowed" }));
-    return;
-  }
-  if (url.pathname === "/speed-test" && handleSpeedTest(request, response, headers, url)) return;
-  if (url.pathname.startsWith("/iperf3/")) {
-    void handleIperf3(request, response, headers, url).then((handled) => {
-      if (handled || response.headersSent) return;
-      response.writeHead(404, { "Content-Type": "application/json", ...headers });
-      response.end(JSON.stringify({ error: "Not found" }));
-    });
     return;
   }
   if (request.method !== "GET" || url.pathname !== "/telemetry") {

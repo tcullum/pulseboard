@@ -17,9 +17,10 @@ type Telemetry = {
   cpu: { usage: number; previous: number };
   memory: { totalBytes: number; usedBytes: number; freeBytes: number; wiredBytes: number; compressedBytes: number; pressure: "Low" | "Medium" | "High" };
   disk: { name: string; totalBytes: number; usedBytes: number; freeBytes: number; percent: number };
-  battery: { percent: number; state: string; timeRemainingMinutes: number | null; cycleCount: number; healthPercent: number; condition: string; powerWatts: number | null };
-  thermal: { status: string; speedLimit: number };
+  battery: { available?: boolean; percent: number; state: string; timeRemainingMinutes: number | null; cycleCount: number; healthPercent: number; condition: string; powerWatts: number | null };
+  thermal: { available?: boolean; status: string; speedLimit: number };
   network: { interface: string; address: string; downloadBytesPerSecond: number; uploadBytesPerSecond: number };
+  system?: { loadAverage?: number[] };
   uptimeSeconds: number;
   processes: { total: number; running: number; items: ProcessItem[] };
   plex?: { available: boolean; status: string; processes: number; cpu: number; memoryBytes: number; detail: string };
@@ -37,80 +38,12 @@ type TelemetryDevice = {
   eyebrow?: string;
 };
 
-type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
-type SpeedResult = { ping: number; jitter: number; download: number; upload: number; loadedLatency: number; bufferbloat: string };
-type SpeedMeta = { clientIp: string; service: string; location: string; country?: string };
-type SpeedHistoryItem = SpeedResult & { timestamp: string };
-type SpeedUnit = "Mbps" | "MB/s";
-type SpeedServerChoice = "auto" | "mac" | "custom" | "iperf3";
-type Iperf3Server = { id: string; city: string; country: string; provider: string; host: string; ports: number[]; capacity: string };
-type Iperf3Status = { available: boolean; version: string; servers: Iperf3Server[]; error?: string };
-
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
-const LOCAL_SPEED_TEST_URL = "http://127.0.0.1:4319/speed-test";
-const IPERF3_SERVERS_URL = "http://127.0.0.1:4319/iperf3/servers";
-const IPERF3_TEST_URL = "http://127.0.0.1:4319/iperf3/test";
 const WINDOWS_PLEX_ID = "windows-win-plex";
 const MACBOOK_ID = "device-thomas-s-macbook-pro";
 const LOCAL_TELEMETRY_TIMEOUT_MS = 6_500;
 const OFFLINE_AFTER_MISSED_POLLS = 3;
-const SPEED_PHASE_MS = 12_000;
-const SPEED_RAMP_UP_MS = 2_000;
-// If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
-// For strict multi-connection testing, terminate this route with HTTP/1.1 at the proxy.
-const SPEED_STREAMS = 6;
-const SPEED_WINDOW_MS = 750;
-const SPEED_SCALE_MAX_MBPS = 3000;
-const SPEED_ARC_START = -126;
-const SPEED_ARC_SWEEP = 252;
-const IPERF3_DEFAULT_SERVER_ID = "us-los-angeles-leaseweb-26";
 const palette = ["#8799ff", "#f3a95f", "#5ee6a8", "#df74e8", "#5dbedf", "#55d779"];
-const FALLBACK_IPERF3_SERVERS: Iperf3Server[] = [
-  { id: "ca-montreal-leaseweb-0", city: "Montreal", country: "CA", provider: "LeaseWeb", host: "speedtest.mtl2.ca.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "ca-montreal-telus-1", city: "Montreal", country: "CA", provider: "TELUS", host: "speedtest.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "10" },
-  { id: "ca-montreal-goco-2", city: "Montréal", country: "CA", provider: "goco", host: "as21723.goco.ca", ports: [9202, 9203, 9204, 9205], capacity: "—" },
-  { id: "ca-ottawa-fortisase-3", city: "Ottawa", country: "CA", provider: "FortiSASE", host: "173.243.131.29", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "ca-toronto-datapacket-4", city: "Toronto", country: "CA", provider: "DATAPACKET", host: "138.199.57.129", ports: [5201], capacity: "2x10" },
-  { id: "ca-toronto-fortisase-5", city: "Toronto", country: "CA", provider: "FortiSASE", host: "96.45.43.6", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "ca-vancouver-fortisase-6", city: "Vancouver", country: "CA", provider: "FortiSASE", host: "66.35.30.9", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "ca-victoria-couch-ca-7", city: "Victoria", country: "CA", provider: "couch.ca", host: "speed.couch.ca", ports: [15201, 15202, 15203, 15204], capacity: "1" },
-  { id: "ca-woodstock-xplore-8", city: "Woodstock", country: "CA", provider: "Xplore", host: "yyc-speedtest.xplore.ca", ports: [8070, 8071, 8072, 8073], capacity: "—" },
-  { id: "us-ashburn-clouvider-9", city: "Ashburn", country: "US", provider: "Clouvider", host: "ash.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
-  { id: "us-ashburn-datapacket-10", city: "Ashburn", country: "US", provider: "DATAPACKET", host: "37.19.206.20", ports: [5201], capacity: "2x10" },
-  { id: "us-ashburn-fortisase-11", city: "Ashburn", country: "US", provider: "FortiSASE", host: "66.35.22.79", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-atlanta-clouvider-12", city: "Atlanta", country: "US", provider: "Clouvider", host: "atl.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
-  { id: "us-atlanta-datapacket-13", city: "Atlanta", country: "US", provider: "DATAPACKET", host: "185.152.66.67", ports: [5201], capacity: "2x10" },
-  { id: "us-boston-datapacket-14", city: "Boston", country: "US", provider: "DATAPACKET", host: "109.61.86.65", ports: [5201], capacity: "2x10" },
-  { id: "us-chicago-leaseweb-15", city: "Chicago", country: "US", provider: "LeaseWeb", host: "speedtest.chi11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-chicago-datapacket-16", city: "Chicago", country: "US", provider: "DATAPACKET", host: "185.93.1.65", ports: [5201], capacity: "2x10" },
-  { id: "us-chicago-clouvider-17", city: "Chicago", country: "US", provider: "Clouvider", host: "chi.speedtest.clouvider.net", ports: [5202, 5203, 5204, 5205], capacity: "10" },
-  { id: "us-dallas-leaseweb-18", city: "Dallas", country: "US", provider: "LeaseWeb", host: "speedtest.dal13.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-dallas-clouvider-19", city: "Dallas", country: "US", provider: "Clouvider", host: "dal.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
-  { id: "us-dallas-datapacket-20", city: "Dallas", country: "US", provider: "DATAPACKET", host: "89.187.164.1", ports: [5201], capacity: "2x10" },
-  { id: "us-dallas-interserver-net-21", city: "Dallas", country: "US", provider: "InterServer.net", host: "dfw.speedtest.is.cc", ports: [5203, 5204, 5205, 5206], capacity: "100" },
-  { id: "us-dallas-fortisase-22", city: "Dallas", country: "US", provider: "FortiSASE", host: "66.35.27.207", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-houston-datapacket-23", city: "Houston", country: "US", provider: "DATAPACKET", host: "37.19.216.1", ports: [5201], capacity: "2x10" },
-  { id: "us-kansas-city-nocix-24", city: "Kansas City", country: "US", provider: "NOCIX", host: "speedtest.nocix.net", ports: [5201, 5202, 5203, 5204], capacity: "200" },
-  { id: "us-los-angeles-clouvider-25", city: "Los Angeles", country: "US", provider: "Clouvider", host: "la.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
-  { id: "us-los-angeles-leaseweb-26", city: "Los Angeles", country: "US", provider: "LeaseWeb", host: "speedtest.lax12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-los-angeles-datapacket-27", city: "Los Angeles", country: "US", provider: "DATAPACKET", host: "185.152.67.2", ports: [5201], capacity: "2x10" },
-  { id: "us-miami-leaseweb-28", city: "Miami", country: "US", provider: "LeaseWeb", host: "speedtest.mia11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-miami-datapacket-29", city: "Miami", country: "US", provider: "DATAPACKET", host: "195.181.162.195", ports: [5201], capacity: "2x10" },
-  { id: "us-miami-fortisase-30", city: "Miami", country: "US", provider: "FortiSASE", host: "23.249.54.234", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-new-york-hostkey-31", city: "New York", country: "US", provider: "HOSTKEY", host: "spd-uswb.hostkey.com", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-new-york-datapacket-32", city: "New York", country: "US", provider: "DATAPACKET", host: "185.59.223.8", ports: [5201], capacity: "2x10" },
-  { id: "us-new-york-city-leaseweb-33", city: "New York City", country: "US", provider: "LeaseWeb", host: "speedtest.nyc1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-phoenix-leaseweb-34", city: "Phoenix", country: "US", provider: "LeaseWeb", host: "speedtest.phx1.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-phoenix-clouvider-35", city: "Phoenix", country: "US", provider: "Clouvider", host: "phx.speedtest.clouvider.net", ports: [5200, 5201, 5202, 5203], capacity: "10" },
-  { id: "us-plano-fortisase-36", city: "Plano", country: "US", provider: "FortiSASE", host: "209.40.123.215", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-salt-lake-xmission-37", city: "Salt Lake", country: "US", provider: "XMISSION", host: "speedtest.xmission.com", ports: [5201, 5202, 5203, 5204], capacity: "—" },
-  { id: "us-san-francisco-leaseweb-38", city: "San Francisco", country: "US", provider: "LeaseWeb", host: "speedtest.sfo12.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-san-jose-fortisase-39", city: "San Jose", country: "US", provider: "FortiSASE", host: "66.35.20.123", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-san-jose-fortisase-40", city: "San Jose", country: "US", provider: "FortiSASE", host: "148.230.59.38", ports: [30001, 30002, 30003, 30004], capacity: "10" },
-  { id: "us-seattle-leaseweb-41", city: "Seattle", country: "US", provider: "LeaseWeb", host: "speedtest.sea11.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-  { id: "us-seattle-datapacket-42", city: "Seattle", country: "US", provider: "DATAPACKET", host: "84.17.41.11", ports: [5201], capacity: "2x10" },
-  { id: "us-washington-leaseweb-43", city: "Washington", country: "US", provider: "LeaseWeb", host: "speedtest.wdc2.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
-];
 
 function Mark({ children }: { children: React.ReactNode }) {
   return <span className="mark" aria-hidden="true">{children}</span>;
@@ -137,100 +70,6 @@ function remaining(minutes: number | null) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return hours ? `${hours}h ${mins}m remaining` : `${mins} min remaining`;
-}
-
-function median(values: number[]) {
-  const sorted = [...values].sort((a, b) => a - b);
-  return sorted[Math.floor(sorted.length / 2)] || 0;
-}
-
-function average(values: number[]) {
-  return values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
-}
-
-function jitter(values: number[]) {
-  if (values.length < 2) return 0;
-  return average(values.slice(1).map((value, index) => Math.abs(value - values[index])));
-}
-
-function trimmedMean(values: number[]) {
-  if (!values.length) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const trim = Math.floor(sorted.length * 0.1);
-  const stable = sorted.slice(trim, sorted.length - trim || sorted.length);
-  return average(stable.length ? stable : sorted);
-}
-
-function bufferbloatGrade(delta: number) {
-  if (delta < 30) return "A";
-  if (delta < 100) return "B";
-  if (delta < 250) return "C";
-  return "D";
-}
-
-function speedRatio(mbps = 0) {
-  return Math.min(Math.max(mbps / SPEED_SCALE_MAX_MBPS, 0), 1);
-}
-
-function gaugeAngle(mbps = 0) {
-  return SPEED_ARC_START + speedRatio(mbps) * SPEED_ARC_SWEEP;
-}
-
-function formatSpeed(mbps = 0, unit: SpeedUnit) {
-  return unit === "MB/s" ? (mbps / 8).toFixed(1) : mbps.toFixed(1);
-}
-
-function formatTick(mbps: number, unit: SpeedUnit) {
-  if (unit === "MB/s") return `${Math.round(mbps / 8)}`;
-  if (mbps >= 1000) return `${mbps / 1000}g`;
-  return `${mbps}`;
-}
-
-function tickPosition(mbps: number) {
-  const angle = (gaugeAngle(mbps) - 90) * Math.PI / 180;
-  const radius = 38;
-  return {
-    left: `${50 + Math.cos(angle) * radius}%`,
-    top: `${50 + Math.sin(angle) * radius}%`,
-  };
-}
-
-function normalizeSpeedBase(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "";
-  const withProtocol = /^[a-z][a-z\d+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
-  try {
-    const url = new URL(withProtocol);
-    if (url.pathname === "/") url.pathname = "/speed-test";
-    url.search = "";
-    url.hash = "";
-    return url.toString().replace(/\/+$/, "");
-  } catch {
-    return withProtocol.replace(/\/+$/, "");
-  }
-}
-
-function speedServerHelp(value: string) {
-  const normalized = normalizeSpeedBase(value);
-  if (!normalized) return "Enter a compatible endpoint URL.";
-  if (/^http:\/\//i.test(normalized) && !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/i.test(normalized)) {
-    return "Public custom servers must use HTTPS from this dashboard.";
-  }
-  return normalized;
-}
-
-function speedTestUrl(baseUrl: string, mode: string, params: Record<string, string | number> = {}) {
-  const search = new URLSearchParams({ mode });
-  for (const [key, value] of Object.entries(params)) search.set(key, String(value));
-  search.set("nonce", `${Date.now()}-${Math.random()}`);
-  return `${baseUrl}?${search.toString()}`;
-}
-
-function speedQuality(download: number) {
-  if (download >= 200) return "Excellent";
-  if (download >= 75) return "Very good";
-  if (download >= 25) return "Good";
-  return "Limited";
 }
 
 function deviceId(telemetry: Telemetry) {
@@ -273,7 +112,6 @@ export default function Home() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
   const [sort, setSort] = useState<"cpu" | "memory">("cpu");
-  const [range, setRange] = useState<"1H" | "6H" | "24H">("1H");
   const [paused, setPaused] = useState(false);
   const [cpuHistory, setCpuHistory] = useState<number[]>(Array(36).fill(0));
   const [activeView, setActiveView] = useState("overview");
@@ -287,23 +125,6 @@ export default function Home() {
   const fetchInFlight = useRef<Promise<void> | null>(null);
   const missedTelemetryPolls = useRef(0);
   const lastGoodTelemetry = useRef<Telemetry | null>(null);
-  const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
-  const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
-  const [speedPartial, setSpeedPartial] = useState<Partial<SpeedResult>>({});
-  const [speedMeta, setSpeedMeta] = useState<SpeedMeta | null>(null);
-  const [speedHistory, setSpeedHistory] = useState<SpeedHistoryItem[]>([]);
-  const [currentSpeed, setCurrentSpeed] = useState(0);
-  const [speedProgress, setSpeedProgress] = useState(0);
-  const [speedUnit, setSpeedUnit] = useState<SpeedUnit>("Mbps");
-  const [speedServer, setSpeedServer] = useState<SpeedServerChoice>("auto");
-  const [customSpeedServer, setCustomSpeedServer] = useState("");
-  const [iperf3Servers, setIperf3Servers] = useState<Iperf3Server[]>(FALLBACK_IPERF3_SERVERS);
-  const [iperf3ServerId, setIperf3ServerId] = useState(IPERF3_DEFAULT_SERVER_ID);
-  const [iperf3Status, setIperf3Status] = useState<"unchecked" | "checking" | "ready" | "missing" | "unreachable">("unchecked");
-  const [iperf3Message, setIperf3Message] = useState("Select iPerf3 to check the local companion.");
-  const [speedError, setSpeedError] = useState("");
-  const speedTestController = useRef<AbortController | null>(null);
-  const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
 
   const navigateTo = useCallback((target: string) => {
     setActiveView(target);
@@ -375,6 +196,7 @@ export default function Home() {
     return request;
   }, [selectedDeviceId]);
 
+  /* Legacy speed-test implementation removed from the interface.
   const runSpeedTest = useCallback(async () => {
     if (speedTestController.current) {
       speedTestController.current.abort();
@@ -690,6 +512,7 @@ export default function Home() {
       if (speedTestController.current === controller) speedTestController.current = null;
     }
   }, [customSpeedServer, iperf3ServerId, iperf3Servers, speedServer]);
+  */
 
   useEffect(() => {
     void fetchTelemetry();
@@ -746,20 +569,6 @@ export default function Home() {
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
     const savedDevice = window.localStorage.getItem("pulseboard-device");
     setSelectedDeviceId(!savedDevice || savedDevice === "local" ? WINDOWS_PLEX_ID : savedDevice);
-    if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
-    const savedServer = window.localStorage.getItem("pulseboard-speed-server");
-    if (savedServer === "mac" || savedServer === "custom" || savedServer === "iperf3") setSpeedServer(savedServer);
-    const savedIperf3Server = window.localStorage.getItem("pulseboard-iperf3-server");
-    if (savedIperf3Server) setIperf3ServerId(savedIperf3Server);
-    setCustomSpeedServer(window.localStorage.getItem("pulseboard-speed-custom-url") || "");
-    const savedHistory = window.localStorage.getItem("pulseboard-speed-history");
-    if (savedHistory) {
-      try {
-        setSpeedHistory((JSON.parse(savedHistory) as SpeedHistoryItem[]).slice(0, 20));
-      } catch {
-        window.localStorage.removeItem("pulseboard-speed-history");
-      }
-    }
   }, []);
 
   useEffect(() => {
@@ -778,67 +587,11 @@ export default function Home() {
   }, [selectedDeviceId]);
 
   useEffect(() => {
-    window.localStorage.setItem("pulseboard-speed-unit", speedUnit);
-  }, [speedUnit]);
-
-  useEffect(() => {
-    window.localStorage.setItem("pulseboard-speed-server", speedServer);
-  }, [speedServer]);
-
-  useEffect(() => {
-    if (customSpeedServer.trim()) window.localStorage.setItem("pulseboard-speed-custom-url", customSpeedServer.trim());
-  }, [customSpeedServer]);
-
-  useEffect(() => {
-    window.localStorage.setItem("pulseboard-iperf3-server", iperf3ServerId);
-  }, [iperf3ServerId]);
-
-  useEffect(() => {
-    if (speedServer !== "iperf3") return;
-    let cancelled = false;
-    const checkingTimer = window.setTimeout(() => {
-      if (cancelled) return;
-      setIperf3Status("checking");
-      setIperf3Message("Checking the local companion for native iPerf3…");
-    }, 0);
-    fetch(IPERF3_SERVERS_URL, { cache: "no-store", mode: "cors" })
-      .then(async (response) => {
-        const payload = await response.json() as Iperf3Status;
-        if (cancelled) return;
-        if (!response.ok || !payload.available) {
-          setIperf3Status("missing");
-          setIperf3Message(payload.error || "Install iperf3 on this machine to run public server tests.");
-          if (payload.servers?.length) setIperf3Servers(payload.servers);
-          return;
-        }
-        const nextServers = payload.servers?.length ? payload.servers : FALLBACK_IPERF3_SERVERS;
-        setIperf3Status("ready");
-        setIperf3Servers(nextServers);
-        if (!nextServers.some((server) => server.id === iperf3ServerId) && nextServers[0]) setIperf3ServerId(nextServers[0].id);
-        setIperf3Message(`Ready · ${payload.version || "iperf3 detected"}`);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setIperf3Status("unreachable");
-        setIperf3Message("The iPerf3 picker works only from the local companion for now. Remote control is not enabled.");
-      });
-    return () => {
-      cancelled = true;
-      window.clearTimeout(checkingTimer);
-    };
-  }, [iperf3ServerId, speedServer]);
-
-  useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") setSettingsOpen(false);
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, []);
-
-  useEffect(() => () => {
-    speedTestController.current?.abort();
-    speedUploadRequests.current.forEach((request) => request.abort());
   }, []);
 
   const processes = useMemo(() => {
@@ -848,13 +601,17 @@ export default function Home() {
 
   const cpu = telemetry?.cpu.usage ?? 0;
   const delta = telemetry ? telemetry.cpu.usage - telemetry.cpu.previous : 0;
+  const cpuAverage = cpuHistory.reduce((total, value) => total + value, 0) / Math.max(cpuHistory.length, 1);
   const download = rate(telemetry?.network.downloadBytesPerSecond);
   const upload = rate(telemetry?.network.uploadBytesPerSecond);
-  const memoryUsedPercent = telemetry ? telemetry.memory.usedBytes / telemetry.memory.totalBytes * 100 : 0;
-  const wiredPercent = telemetry ? telemetry.memory.wiredBytes / telemetry.memory.totalBytes * 100 : 0;
-  const compressedPercent = telemetry ? telemetry.memory.compressedBytes / telemetry.memory.totalBytes * 100 : 0;
+  const memoryTotal = telemetry?.memory.totalBytes || 0;
+  const memoryUsedPercent = memoryTotal ? (telemetry!.memory.usedBytes / memoryTotal) * 100 : 0;
+  const wiredPercent = memoryTotal ? (telemetry!.memory.wiredBytes / memoryTotal) * 100 : 0;
+  const compressedPercent = memoryTotal ? (telemetry!.memory.compressedBytes / memoryTotal) * 100 : 0;
   const appPercent = Math.max(0, memoryUsedPercent - wiredPercent - compressedPercent);
-  const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
+  const freeMemoryPercent = memoryTotal ? (telemetry!.memory.freeBytes / memoryTotal) * 100 : 0;
+  const sampleAgeSeconds = telemetry ? (transport === "relay" ? relayAgeSeconds : 0) : null;
+  const isHealthy = status === "live" && telemetry?.thermal.status !== "Elevated" && telemetry.memory.pressure !== "High";
   const activePlatform = telemetry?.device.platform || (selectedDeviceId === WINDOWS_PLEX_ID ? "windows" : "macos");
   const activePlatformName = platformLabel(activePlatform);
   const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
@@ -871,24 +628,6 @@ export default function Home() {
     { ...(macRelay || { id: MACBOOK_ID, name: "Thomas's MacBook Pro", platform: "macos", os: "macOS", chip: "" }), displayName: "Thomas's MacBook Pro", eyebrow: "MacBook" },
     ...relayDevices.filter((device) => !isWindowsClient(device) && !isMacBookClient(device)).map((device) => ({ ...device, displayName: clientDisplayName(device), eyebrow: clientEyebrow(device) })),
   ].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index);
-  const isSpeedRunning = ["ping", "download", "upload"].includes(speedStage);
-  const speedDisplay = speedResult ?? speedPartial;
-  const primarySpeed = isSpeedRunning && speedStage !== "ping" ? currentSpeed : speedStage === "upload" && speedDisplay.upload ? speedDisplay.upload : speedDisplay.download ?? 0;
-  const gaugeValue = primarySpeed || 0;
-  const gaugeLabel = speedStage === "ping" ? "Ping" : speedStage === "upload" ? "Upload" : "Download";
-  const speedProgressPercent = Math.round(speedProgress * 100);
-  const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
-  const speedTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
-  const selectedIperf3Server = iperf3Servers.find((server) => server.id === iperf3ServerId) ?? iperf3Servers[0];
-  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "Local companion" : speedServer === "iperf3" ? "Public iPerf3 server" : "Custom endpoint";
-  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this machine" : speedServer === "iperf3" && selectedIperf3Server ? `${selectedIperf3Server.city}, ${selectedIperf3Server.country} · ${selectedIperf3Server.provider}` : "Selected by viewer location";
-  const canRunSpeedTest = speedServer === "custom" ? Boolean(customSpeedServer.trim()) : speedServer === "iperf3" ? iperf3Status === "ready" : true;
-  const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
-  const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
-    const icons = { ping: "⌾", download: "↓", upload: "↑" };
-    return <span key={stage} className={`${speedStage === stage ? "active" : ""} ${stageOrder > index ? "done" : ""}`}>{icons[stage]}</span>;
-  };
-
   return (
     <main className={`shell ${theme === "day" ? "themeDay" : ""}`}>
       <aside className="rail" aria-label="System views">
@@ -899,7 +638,6 @@ export default function Home() {
           <button className={`railButton ${activeView === "storage" && !settingsOpen ? "active" : ""}`} aria-label="Storage" aria-current={activeView === "storage" ? "page" : undefined} onClick={() => navigateTo("storage")}><Mark>◫</Mark><span>Storage</span></button>
           <button className={`railButton ${activeView === "network" && !settingsOpen ? "active" : ""}`} aria-label="Network" aria-current={activeView === "network" ? "page" : undefined} onClick={() => navigateTo("network")}><Mark>↗</Mark><span>Network</span></button>
           <button className={`railButton ${activeView === "processes" && !settingsOpen ? "active" : ""}`} aria-label="Processes" aria-current={activeView === "processes" ? "page" : undefined} onClick={() => navigateTo("processes")}><Mark>≡</Mark><span>Processes</span></button>
-          <button className={`railButton ${activeView === "tools" && !settingsOpen ? "active" : ""}`} aria-label="Tools" aria-current={activeView === "tools" ? "page" : undefined} onClick={() => navigateTo("tools")}><Mark>⌁</Mark><span>Tools</span></button>
         </nav>
         <div className="railBottom">
           <button className={`railButton ${settingsOpen ? "active" : ""}`} aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(true)}><Mark>⚙</Mark><span>Settings</span></button>
@@ -938,7 +676,7 @@ export default function Home() {
           )}
 
           <section className="headingRow scrollTarget" id="overview">
-            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from Windows Plex and Thomas&apos;s MacBook Pro.</p></div>
+            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from the selected machine.</p></div>
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
@@ -964,15 +702,15 @@ export default function Home() {
 
             <article className="card thermalCard">
               <div className="cardHeader"><div><p className="label">THERMAL PRESSURE</p><div className="thermalStatus">{telemetry?.thermal.status || "—"}</div></div><div className="thermalGlyph">°</div></div>
-              <div className="thermalScale"><span /><i style={{ left: telemetry?.thermal.status === "Normal" ? "18%" : "68%" }} /></div>
+              <div className={`thermalScale ${telemetry?.thermal.available === false ? "unavailable" : ""}`}><span /><i style={{ left: telemetry?.thermal.status === "Normal" ? "18%" : telemetry?.thermal.status === "Elevated" ? "68%" : "18%" }} /></div>
               <div className="thermalLabels"><span>Normal</span><span>Elevated</span><span>Critical</span></div>
-              <div className="fanRow"><span>CPU speed limit</span><b>{telemetry?.thermal.speedLimit || 0}<small>%</small></b></div>
+              <div className="fanRow"><span>{telemetry?.thermal.available === false ? "Windows thermal sensors" : "CPU speed limit"}</span><b>{telemetry?.thermal.available === false ? "Unavailable" : <>{telemetry?.thermal.speedLimit || 0}<small>%</small></>}</b></div>
             </article>
           </section>
 
           <section className="quickGrid">
             <article className="miniCard networkCard scrollTarget" id="network"><Mark>↑↓</Mark><div><p>NETWORK · {telemetry?.network.interface || "—"}</p><div className="ipAddress"><span>LOCAL IP</span><code>{telemetry?.network.address || "Unavailable"}</code></div><b>{download.value} <small>{download.unit}</small></b><span>↓ Download</span></div><div className="miniStat"><b>{upload.value} <small>{upload.unit}</small></b><span>↑ Upload</span></div></article>
-            <article className="miniCard"><Mark>◷</Mark><div><p>UPTIME</p><b>{uptime(telemetry?.uptimeSeconds)}</b><span>Since last restart</span></div></article>
+            <article className="miniCard"><Mark>◷</Mark><div><p>UPTIME</p><b>{uptime(telemetry?.uptimeSeconds)}</b><span>{telemetry?.system?.loadAverage?.length ? `1m load ${telemetry.system.loadAverage[0].toFixed(2)}` : "Since last restart"}</span></div></article>
             <article className="miniCard"><Mark>▤</Mark><div><p>PROCESSES</p><b>{telemetry?.processes.total || 0}</b><span>{telemetry?.processes.running || 0} running</span></div><div className="miniStat"><b>{telemetry?.device.logicalCores || 0}</b><span>Logical cores</span></div></article>
             <article className="miniCard"><Mark>⌁</Mark><div><p>POWER DRAW</p><b>{telemetry?.battery.powerWatts?.toFixed(1) || "—"} <small>W</small></b><span>{telemetry?.battery.state || "Unavailable"}</span></div><span className="stable">Live</span></article>
           </section>
@@ -1012,18 +750,25 @@ export default function Home() {
               </article>
 
               <article className="card batteryCard">
-                <div className="batteryTop"><div className="batteryIcon"><span style={{ width: `${telemetry?.battery.percent || 0}%` }} /></div><div><b>{telemetry?.battery.percent || 0}%</b><span>{telemetry ? `${telemetry.battery.state} · ${remaining(telemetry.battery.timeRemainingMinutes)}` : "Waiting for companion"}</span></div></div>
-                <div className="batteryFacts"><div><span>Condition</span><b>{telemetry?.battery.condition || "—"}</b></div><div><span>Cycle count</span><b>{telemetry?.battery.cycleCount || 0}</b></div><div><span>Capacity</span><b>{telemetry?.battery.healthPercent || 0}%</b></div></div>
+                <div className="batteryTop"><div className={`batteryIcon ${telemetry?.battery.available === false ? "unavailable" : ""}`}><span style={{ width: `${telemetry?.battery.available === false ? 0 : telemetry?.battery.percent || 0}%` }} /></div><div><b>{telemetry?.battery.available === false ? "AC" : `${telemetry?.battery.percent || 0}%`}</b><span>{telemetry ? (telemetry.battery.available === false ? "Desktop power · no battery sensor" : `${telemetry.battery.state} · ${remaining(telemetry.battery.timeRemainingMinutes)}`) : "Waiting for companion"}</span></div></div>
+                <div className="batteryFacts"><div><span>Condition</span><b>{telemetry?.battery.available === false ? "Not applicable" : telemetry?.battery.condition || "—"}</b></div><div><span>Cycle count</span><b>{telemetry?.battery.available === false ? "—" : telemetry?.battery.cycleCount || 0}</b></div><div><span>Capacity</span><b>{telemetry?.battery.available === false ? "—" : `${telemetry?.battery.healthPercent || 0}%`}</b></div></div>
               </article>
             </div>
           </section>
 
           <section className="history card">
-            <div><p className="label">LIVE CPU HISTORY</p><h2>Resource activity</h2></div>
+            <div><p className="label">LIVE CPU HISTORY</p><h2>Resource activity</h2><span className="historyMeta">Last {Math.max(1, Math.round(cpuHistory.length * refreshInterval / 1000))} sec · {refreshInterval / 1000}s refresh</span></div>
             <div className="historyBars" aria-hidden="true">{cpuHistory.map((height, index) => <i key={index} style={{ height: `${Math.max(2, height)}%` }} />)}</div>
-            <div className="rangeControl">{(["1H", "6H", "24H"] as const).map((item) => <button key={item} className={range === item ? "selected" : ""} onClick={() => setRange(item)}>{item}</button>)}</div>
+            <div className="historySummary"><b>{cpu.toFixed(1)}%</b><span>current load</span><b>{cpuAverage.toFixed(1)}%</b><span>window average</span></div>
           </section>
 
+          <section className="statusGrid" aria-label="System diagnostics">
+            <article className="statusCard card"><p className="label">TELEMETRY QUALITY</p><h2>{transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Waiting for feed"}</h2><span>{sampleAgeSeconds === null ? "No sample received" : `${sampleAgeSeconds}s sample age · ${refreshInterval / 1000}s cadence`}</span></article>
+            <article className="statusCard card"><p className="label">MEMORY HEADROOM</p><h2>{telemetry ? `${gb(telemetry.memory.freeBytes)} GB free` : "—"}</h2><span>{telemetry ? `${freeMemoryPercent.toFixed(0)}% available · ${telemetry.memory.pressure} pressure` : "Waiting for companion"}</span></article>
+            <article className="statusCard card"><p className="label">NETWORK IDENTITY</p><h2>{telemetry?.network.address || "Unavailable"}</h2><span>{telemetry?.network.interface || "No interface"} · live traffic sampled</span></article>
+          </section>
+
+          {/*
           <section className="speedTool card scrollTarget" id="tools" aria-labelledby="speed-test-title">
             <div className="speedHeader">
               <div>
@@ -1116,6 +861,7 @@ export default function Home() {
               </div>
             )}
           </section>
+          */}
           <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for companion"}</span></footer>
         </div>
       </section>
