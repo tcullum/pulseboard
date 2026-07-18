@@ -167,6 +167,12 @@ export default function Home() {
           const relay = await relayResponse.json() as { telemetry?: Telemetry; devices?: TelemetryDevice[]; ageSeconds?: number; stale?: boolean };
           if (relay.devices) setRelayDevices(relay.devices);
           if (!relayResponse.ok || !relay.telemetry) throw new Error("Relay unavailable");
+          if (relay.stale) {
+            setRelayAgeSeconds(relay.ageSeconds || 0);
+            setTransport("relay");
+            setStatus("offline");
+            return;
+          }
           missedTelemetryPolls.current = 0;
           lastGoodTelemetry.current = relay.telemetry;
           setTelemetry(relay.telemetry);

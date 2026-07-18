@@ -43,6 +43,7 @@ test("keeps the dashboard focused on trustworthy telemetry", async () => {
   assert.match(visiblePage, /MEMORY HEADROOM/);
   assert.match(visiblePage, /NETWORK IDENTITY/);
   assert.match(visiblePage, /sample age/);
+  assert.match(visiblePage, /relay\.stale/);
   assert.match(visiblePage, /available === false/);
   assert.match(companion, /loadAverage/);
   assert.match(companion, /Win32_PerfFormattedData_PerfProc_Process/);
