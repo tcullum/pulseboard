@@ -92,6 +92,23 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## Pulseboard Companion
+
+The Windows companion reports local machine telemetry, Plex process usage, and,
+when a Plex token is available, active Plex playback sessions from
+`/status/sessions`.
+
+Optional Plex playback setup:
+
+```powershell
+$env:PLEX_URL = "http://127.0.0.1:32400"
+$env:PLEX_TOKEN = "your-plex-token"
+npm run telemetry:install:windows
+```
+
+The token stays in the local companion config and is used only for calls to the
+Plex server. It is not sent to the Pulseboard dashboard.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)

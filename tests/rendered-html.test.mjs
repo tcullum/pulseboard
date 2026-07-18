@@ -49,3 +49,23 @@ test("keeps the dashboard focused on trustworthy telemetry", async () => {
   assert.match(companion, /Win32_PerfFormattedData_PerfProc_Process/);
   assert.match(companion, /thermalStats/);
 });
+
+test("surfaces Plex playback stream telemetry", async () => {
+  const [page, companion, windowsInstaller, macInstaller] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
+    readFile(new URL("companion/install-windows.ps1", root), "utf8"),
+    readFile(new URL("companion/install.sh", root), "utf8"),
+  ]);
+
+  assert.match(companion, /plexPlaybackTelemetry/);
+  assert.match(companion, /\/status\/sessions/);
+  assert.match(companion, /PlexOnlineToken/);
+  assert.match(companion, /X-Plex-Token/);
+  assert.match(companion, /TranscodeSession/);
+  assert.match(page, /plexNowPlaying/);
+  assert.match(page, /transcodeSessions/);
+  assert.match(page, /bandwidthKbps/);
+  assert.match(windowsInstaller, /PLEX_TOKEN/);
+  assert.match(macInstaller, /PLEX_TOKEN/);
+});

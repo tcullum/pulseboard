@@ -11,13 +11,23 @@ $taskName = "Pulseboard Companion"
 
 New-Item -ItemType Directory -Force -Path $configDir, $logDir | Out-Null
 
-if ($env:PULSEBOARD_RELAY_TOKEN -and $env:PULSEBOARD_SIWC_TOKEN) {
-  $config = @{
-    relayUrl = "https://pulseboard-mac-monitor.rysingsun.chatgpt.site"
-    deviceToken = $env:PULSEBOARD_RELAY_TOKEN
-    siwcToken = $env:PULSEBOARD_SIWC_TOKEN
-  } | ConvertTo-Json -Depth 3
-  Set-Content -Path $configPath -Value $config -Encoding UTF8
+if ($env:PULSEBOARD_RELAY_TOKEN -or $env:PULSEBOARD_SIWC_TOKEN -or $env:PLEX_TOKEN -or $env:PLEX_URL) {
+  $config = @{}
+  if (Test-Path $configPath) {
+    $existing = Get-Content -Raw -Path $configPath | ConvertFrom-Json -ErrorAction SilentlyContinue
+    if ($existing) {
+      $existing.PSObject.Properties | ForEach-Object { $config[$_.Name] = $_.Value }
+    }
+  }
+  if ($env:PULSEBOARD_RELAY_TOKEN -and $env:PULSEBOARD_SIWC_TOKEN) {
+    $config["relayUrl"] = "https://pulseboard-mac-monitor.rysingsun.chatgpt.site"
+    $config["deviceToken"] = $env:PULSEBOARD_RELAY_TOKEN
+    $config["siwcToken"] = $env:PULSEBOARD_SIWC_TOKEN
+  }
+  if ($env:PLEX_TOKEN) { $config["plexToken"] = $env:PLEX_TOKEN }
+  if ($env:PLEX_URL) { $config["plexUrl"] = $env:PLEX_URL }
+  $configJson = $config | ConvertTo-Json -Depth 4
+  Set-Content -Path $configPath -Value $configJson -Encoding UTF8
 }
 
 $launcher = @"

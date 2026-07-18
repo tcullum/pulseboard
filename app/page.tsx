@@ -23,7 +23,41 @@ type Telemetry = {
   system?: { loadAverage?: number[] };
   uptimeSeconds: number;
   processes: { total: number; running: number; items: ProcessItem[] };
-  plex?: { available: boolean; status: string; processes: number; cpu: number; memoryBytes: number; detail: string };
+  plex?: {
+    available: boolean;
+    status: string;
+    processes: number;
+    cpu: number;
+    memoryBytes: number;
+    detail: string;
+    playback?: {
+      configured: boolean;
+      reachable: boolean;
+      server: string;
+      version?: string;
+      sessions: number;
+      transcodeSessions: number;
+      detail?: string;
+      items: Array<{
+        state: string;
+        title: string;
+        subtitle?: string;
+        type: string;
+        user?: string;
+        player: string;
+        product?: string;
+        platform?: string;
+        location?: string;
+        quality: string;
+        decision: string;
+        transcode: boolean;
+        progressPercent: number;
+        remainingSeconds: number;
+        bandwidthKbps: number;
+        stream?: { container?: string; video?: string; audio?: string; resolution?: string; protocol?: string; speed?: number; throttled?: boolean };
+      }>;
+    };
+  };
 };
 
 type TelemetryDevice = {
@@ -70,6 +104,13 @@ function remaining(minutes: number | null) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return hours ? `${hours}h ${mins}m remaining` : `${mins} min remaining`;
+}
+
+function shortDuration(seconds = 0) {
+  if (!seconds) return "Live";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return hours ? `${hours}h ${minutes}m left` : `${minutes}m left`;
 }
 
 function deviceId(telemetry: Telemetry) {
@@ -622,6 +663,8 @@ export default function Home() {
   const activePlatformName = platformLabel(activePlatform);
   const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
   const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
+  const plexPlayback = telemetry?.plex?.playback;
+  const plexSessions = plexPlayback?.items || [];
   const headline = status === "live"
     ? isHealthy
       ? `${activeDisplayName} is running smoothly.`
@@ -746,13 +789,37 @@ export default function Home() {
               </article>
 
               <article className="card plexCard scrollTarget" id="plex">
-                <div className="cardHeader"><div><p className="label">PLEX CLIENT</p><h2>{telemetry?.plex?.status || (activePlatform === "windows" ? "Waiting for Plex" : "Windows companion")}</h2></div><span className={`plexBadge ${telemetry?.plex?.available ? "online" : ""}`}>{telemetry?.plex?.available ? "Active" : "Idle"}</span></div>
+                <div className="cardHeader"><div><p className="label">PLEX CLIENT</p><h2>{telemetry?.plex?.status || (activePlatform === "windows" ? "Waiting for Plex" : "Windows companion")}</h2></div><span className={`plexBadge ${telemetry?.plex?.available ? "online" : ""}`}>{plexPlayback?.sessions ? "Playing" : telemetry?.plex?.available ? "Active" : "Idle"}</span></div>
                 <p>{telemetry?.plex?.detail || "Switch to the Windows 11 client to monitor Plex or Plexamp activity."}</p>
                 <div className="plexStats">
                   <div><span>Processes</span><b>{telemetry?.plex?.processes || 0}</b></div>
                   <div><span>CPU</span><b>{telemetry?.plex?.cpu?.toFixed(1) || "0.0"}%</b></div>
                   <div><span>Memory</span><b>{gb(telemetry?.plex?.memoryBytes || 0)} GB</b></div>
+                  <div><span>Sessions</span><b>{plexPlayback?.sessions || 0}</b></div>
+                  <div><span>Transcodes</span><b>{plexPlayback?.transcodeSessions || 0}</b></div>
+                  <div><span>Server</span><b>{plexPlayback?.reachable ? "Online" : plexPlayback?.configured ? "Offline" : "Token"}</b></div>
                 </div>
+                {plexSessions.length > 0 ? (
+                  <div className="plexNowPlaying" aria-label="Plex playback sessions">
+                    {plexSessions.map((session) => (
+                      <div className="plexSession" key={`${session.player}-${session.title}-${session.progressPercent}`}>
+                        <div className="plexSessionTop">
+                          <span className={`plexState ${session.transcode ? "transcode" : ""}`}>{session.transcode ? "Transcode" : session.decision}</span>
+                          <b>{session.title}</b>
+                          <small>{session.state} - {shortDuration(session.remainingSeconds)}</small>
+                        </div>
+                        <div className="plexProgress"><i style={{ width: `${session.progressPercent}%` }} /></div>
+                        <div className="plexSessionMeta">
+                          <span>{session.player}{session.user ? ` - ${session.user}` : ""}</span>
+                          <span>{session.quality}</span>
+                          <span>{session.bandwidthKbps ? `${session.bandwidthKbps} kbps` : session.stream?.protocol || "Direct"}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="plexEmpty">{plexPlayback?.configured ? (plexPlayback?.reachable ? "Plex server is reachable with no active playback." : "Plex token is configured, but the server is not reachable.") : "Plex server sessions need a local Plex token."}</div>
+                )}
               </article>
 
               <article className="card batteryCard">

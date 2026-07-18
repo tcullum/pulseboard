@@ -10,18 +10,25 @@ CONFIG_PATH="$CONFIG_DIR/relay.json"
 
 mkdir -p "$LOG_DIR" "$CONFIG_DIR"
 
-if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" && -n "${PULSEBOARD_SIWC_TOKEN:-}" ]]; then
+if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" || -n "${PULSEBOARD_SIWC_TOKEN:-}" || -n "${PLEX_TOKEN:-}" || -n "${PLEX_URL:-}" ]]; then
   umask 077
   PULSEBOARD_CONFIG_PATH="$CONFIG_PATH" \
-  PULSEBOARD_RELAY_TOKEN="$PULSEBOARD_RELAY_TOKEN" \
-  PULSEBOARD_SIWC_TOKEN="$PULSEBOARD_SIWC_TOKEN" \
+  PULSEBOARD_RELAY_TOKEN="${PULSEBOARD_RELAY_TOKEN:-}" \
+  PULSEBOARD_SIWC_TOKEN="${PULSEBOARD_SIWC_TOKEN:-}" \
+  PLEX_TOKEN="${PLEX_TOKEN:-}" \
+  PLEX_URL="${PLEX_URL:-}" \
   "$NODE_PATH" -e '
     const fs = require("node:fs");
-    fs.writeFileSync(process.env.PULSEBOARD_CONFIG_PATH, JSON.stringify({
-      relayUrl: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
-      deviceToken: process.env.PULSEBOARD_RELAY_TOKEN,
-      siwcToken: process.env.PULSEBOARD_SIWC_TOKEN,
-    }, null, 2));
+    let config = {};
+    try { config = JSON.parse(fs.readFileSync(process.env.PULSEBOARD_CONFIG_PATH, "utf8")); } catch {}
+    if (process.env.PULSEBOARD_RELAY_TOKEN && process.env.PULSEBOARD_SIWC_TOKEN) {
+      config.relayUrl = "https://pulseboard-mac-monitor.rysingsun.chatgpt.site";
+      config.deviceToken = process.env.PULSEBOARD_RELAY_TOKEN;
+      config.siwcToken = process.env.PULSEBOARD_SIWC_TOKEN;
+    }
+    if (process.env.PLEX_TOKEN) config.plexToken = process.env.PLEX_TOKEN;
+    if (process.env.PLEX_URL) config.plexUrl = process.env.PLEX_URL;
+    fs.writeFileSync(process.env.PULSEBOARD_CONFIG_PATH, JSON.stringify(config, null, 2));
   '
 fi
 

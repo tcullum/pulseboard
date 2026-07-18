@@ -209,6 +209,15 @@ let previousNetworkAt = Date.now();
 let relayState = "starting";
 let speedBuffer = null;
 
+function readConfig() {
+  try {
+    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
+    return config && typeof config === "object" ? config : {};
+  } catch {
+    return {};
+  }
+}
+
 function cpuUsage() {
   const current = cpuSnapshot();
   const idle = current.idle - previousCpu.idle;
@@ -442,25 +451,220 @@ function macDevice() {
 
 const staticDevice = isWindows ? windowsDevice() : macDevice();
 
-function plexStats(processes) {
+function xmlAttribute(text, name) {
+  const match = String(text || "").match(new RegExp(`${name}="([^"]*)"`, "i"));
+  return match ? match[1].replace(/&quot;/g, "\"").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">") : "";
+}
+
+function xmlAttrs(text) {
+  const attrs = {};
+  for (const match of String(text || "").matchAll(/([A-Za-z_:][\w:.-]*)="([^"]*)"/g)) attrs[match[1]] = xmlAttribute(match[0], match[1]);
+  return attrs;
+}
+
+function plexPreferencesToken() {
+  const candidates = isWindows
+    ? [path.join(process.env.LOCALAPPDATA || "", "Plex Media Server", "Preferences.xml")]
+    : [path.join(os.homedir(), "Library", "Application Support", "Plex Media Server", "Preferences.xml")];
+  for (const candidate of candidates) {
+    try {
+      const token = xmlAttribute(fs.readFileSync(candidate, "utf8"), "PlexOnlineToken");
+      if (token) return token;
+    } catch {
+      // Plex Media Server is not installed locally or has not written preferences yet.
+    }
+  }
+  return "";
+}
+
+function plexConfig() {
+  const config = readConfig();
+  const plex = config.plex || {};
+  const token = process.env.PLEX_TOKEN || plex.token || config.plexToken || plexPreferencesToken();
+  const url = process.env.PLEX_URL || plex.url || config.plexUrl || "http://127.0.0.1:32400";
+  return { url, token, configured: Boolean(token) };
+}
+
+async function plexRequest(endpoint, config) {
+  if (!config.configured) return null;
+  const url = new URL(endpoint, config.url.endsWith("/") ? config.url : `${config.url}/`);
+  const response = await fetch(url, {
+    headers: {
+      "Accept": "application/json, text/xml;q=0.9",
+      "X-Plex-Token": config.token,
+    },
+    signal: AbortSignal.timeout(2500),
+  });
+  if (!response.ok) throw new Error(`Plex responded ${response.status}`);
+  const text = await response.text();
+  try {
+    return { json: JSON.parse(text), text };
+  } catch {
+    return { json: null, text };
+  }
+}
+
+function plexMediaTitle(item) {
+  if (item.grandparentTitle && item.title) return `${item.grandparentTitle} - ${item.title}`;
+  if (item.parentTitle && item.title) return `${item.parentTitle} - ${item.title}`;
+  return item.title || item.originalTitle || "Untitled";
+}
+
+function secondsFromMs(value) {
+  const seconds = Math.max(0, Math.round(Number(value || 0) / 1000));
+  return Number.isFinite(seconds) ? seconds : 0;
+}
+
+function normalizePlexSession(item) {
+  const player = item.Player || {};
+  const session = item.Session || {};
+  const user = item.User || {};
+  const media = Array.isArray(item.Media) ? item.Media[0] || {} : item.Media || {};
+  const part = Array.isArray(media.Part) ? media.Part[0] || {} : media.Part || {};
+  const transcode = item.TranscodeSession || {};
+  const duration = secondsFromMs(item.duration);
+  const progressSeconds = secondsFromMs(item.viewOffset);
+  const progressPercent = duration ? Math.min(100, Math.round(progressSeconds / duration * 100)) : 0;
+  const decision = transcode.videoDecision || transcode.audioDecision || part.decision || media.decision || "Direct";
+  const quality = [media.videoResolution, media.videoCodec, media.audioCodec].filter(Boolean).join(" / ") || media.container || "Media";
+  return {
+    state: String(session.state || player.state || "playing").toLowerCase(),
+    title: plexMediaTitle(item),
+    subtitle: [item.parentTitle, item.year].filter(Boolean).join(" - "),
+    type: item.type || "media",
+    user: user.title || user.username || "",
+    player: player.title || player.product || "Plex player",
+    product: player.product || "",
+    platform: player.platform || "",
+    location: player.local === "1" ? "Local" : player.address || "",
+    quality,
+    decision: String(decision).replace(/^\w/, (letter) => letter.toUpperCase()),
+    transcode: Boolean(transcode.key || transcode.progress || /transcode/i.test(String(decision))),
+    progressPercent,
+    remainingSeconds: duration ? Math.max(0, duration - progressSeconds) : 0,
+    bandwidthKbps: Number(transcode.bandwidth || media.bitrate || 0),
+    stream: {
+      container: transcode.container || media.container || "",
+      video: transcode.videoCodec || media.videoCodec || "",
+      audio: transcode.audioCodec || media.audioCodec || "",
+      resolution: media.videoResolution || [media.width, media.height].filter(Boolean).join("x"),
+      protocol: transcode.protocol || part.protocol || "",
+      speed: Number(transcode.speed || 0),
+      throttled: transcode.throttled === "1" || transcode.throttled === true,
+    },
+  };
+}
+
+function plexSessionsFromJson(json) {
+  const container = json?.MediaContainer || json;
+  const metadata = container?.Metadata || container?.Video || container?.Track || [];
+  const list = Array.isArray(metadata) ? metadata : [metadata].filter(Boolean);
+  return {
+    server: {
+      name: container?.friendlyName || container?.title1 || "Plex Media Server",
+      version: container?.version || "",
+      sessions: Number(container?.size || list.length || 0),
+      transcodeSessions: Number(container?.transcoderActiveVideoSessions || 0),
+    },
+    sessions: list.map(normalizePlexSession),
+  };
+}
+
+function plexSessionsFromXml(xml) {
+  const containerOpen = xml.match(/<MediaContainer\b[^>]*>/i)?.[0] || "";
+  const blocks = [...xml.matchAll(/<(Video|Track|Photo)\b[^>]*(?:\/>|>[\s\S]*?<\/\1>)/gi)].map((match) => match[0]);
+  const sessions = blocks.map((block) => {
+    const mediaTag = block.match(/^<(Video|Track|Photo)\b[^>]*>/i)?.[0] || "";
+    const media = xmlAttrs(block.match(/<Media\b[^>]*>/i)?.[0] || "");
+    const part = xmlAttrs(block.match(/<Part\b[^>]*>/i)?.[0] || "");
+    return normalizePlexSession({
+      ...xmlAttrs(mediaTag),
+      User: xmlAttrs(block.match(/<User\b[^>]*>/i)?.[0] || ""),
+      Player: xmlAttrs(block.match(/<Player\b[^>]*>/i)?.[0] || ""),
+      Session: xmlAttrs(block.match(/<Session\b[^>]*>/i)?.[0] || ""),
+      TranscodeSession: xmlAttrs(block.match(/<TranscodeSession\b[^>]*>/i)?.[0] || ""),
+      Media: { ...media, Part: part },
+    });
+  });
+  return {
+    server: {
+      name: xmlAttribute(containerOpen, "friendlyName") || xmlAttribute(containerOpen, "title1") || "Plex Media Server",
+      version: xmlAttribute(containerOpen, "version"),
+      sessions: Number(xmlAttribute(containerOpen, "size") || sessions.length || 0),
+      transcodeSessions: Number(xmlAttribute(containerOpen, "transcoderActiveVideoSessions") || 0),
+    },
+    sessions,
+  };
+}
+
+async function plexPlaybackTelemetry() {
+  const config = plexConfig();
+  if (!config.configured) {
+    return {
+      configured: false,
+      reachable: false,
+      server: "Not configured",
+      sessions: 0,
+      transcodeSessions: 0,
+      items: [],
+      detail: "Add a Plex token to Pulseboard's local companion config to show playback sessions.",
+    };
+  }
+  try {
+    const [serverInfo, sessionInfo] = await Promise.all([
+      plexRequest("/", config),
+      plexRequest("/status/sessions", config),
+    ]);
+    const server = serverInfo?.json ? plexSessionsFromJson(serverInfo.json).server : plexSessionsFromXml(serverInfo?.text || "").server;
+    const playback = sessionInfo?.json ? plexSessionsFromJson(sessionInfo.json) : plexSessionsFromXml(sessionInfo?.text || "");
+    const sessions = playback.sessions.slice(0, 4);
+    return {
+      configured: true,
+      reachable: true,
+      server: server.name,
+      version: server.version,
+      sessions: playback.server.sessions,
+      transcodeSessions: playback.server.transcodeSessions || sessions.filter((item) => item.transcode).length,
+      items: sessions,
+      detail: sessions[0]
+        ? `${sessions[0].title} is ${sessions[0].state} on ${sessions[0].player}.`
+        : "No active Plex playback sessions.",
+    };
+  } catch (error) {
+    return {
+      configured: true,
+      reachable: false,
+      server: "Unavailable",
+      sessions: 0,
+      transcodeSessions: 0,
+      items: [],
+      detail: error instanceof Error ? error.message : "Plex server did not respond.",
+    };
+  }
+}
+
+async function plexStats(processes) {
   if (!isWindows) {
-    return { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows." };
+    return { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows.", playback: { configured: false, reachable: false, server: "Windows only", sessions: 0, transcodeSessions: 0, items: [] } };
   }
   const items = processes.items.filter((item) => /plex/i.test(item.name));
   const cpu = items.reduce((total, item) => total + item.cpu, 0);
   const memoryBytes = items.reduce((total, item) => total + item.memoryBytes, 0);
   const player = items.find((item) => /plex|plexamp/i.test(item.name));
+  const playback = await plexPlaybackTelemetry();
+  const hasPlayback = playback.reachable && playback.sessions > 0;
   return {
-    available: items.length > 0,
-    status: items.length ? "Detected" : "Not running",
+    available: items.length > 0 || playback.reachable,
+    status: hasPlayback ? "Streaming" : items.length ? "Detected" : playback.configured ? "Server quiet" : "Not configured",
     processes: items.length,
     cpu: Number(cpu.toFixed(1)),
     memoryBytes,
-    detail: player ? `${player.name} is active on this Windows client.` : "Start Plex or Plexamp and Pulseboard will pick it up.",
+    detail: hasPlayback ? playback.detail : player ? `${player.name} is active on this Windows client.` : playback.detail,
+    playback,
   };
 }
 
-function collectTelemetry() {
+async function collectTelemetry() {
   const processes = processStats();
   return {
     timestamp: new Date().toISOString(),
@@ -474,7 +678,7 @@ function collectTelemetry() {
     system: { loadAverage: isWindows ? [] : os.loadavg().map((value) => Number(value.toFixed(2))) },
     uptimeSeconds: os.uptime(),
     processes,
-    plex: plexStats(processes),
+    plex: await plexStats(processes),
   };
 }
 
@@ -500,19 +704,15 @@ function initialTelemetry() {
     uptimeSeconds: os.uptime(),
     processes: { total: 0, running: 0, items: [] },
     plex: isWindows
-      ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity." }
-      : { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows." },
+      ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity.", playback: { configured: false, reachable: false, server: "Checking", sessions: 0, transcodeSessions: 0, items: [] } }
+      : { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows.", playback: { configured: false, reachable: false, server: "Windows only", sessions: 0, transcodeSessions: 0, items: [] } },
   };
 }
 
 function relayConfig() {
-  try {
-    const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
-    if (!config.relayUrl || !config.deviceToken || !config.siwcToken) return null;
-    return config;
-  } catch {
-    return null;
-  }
+  const config = readConfig();
+  if (!config.relayUrl || !config.deviceToken || !config.siwcToken) return null;
+  return config;
 }
 
 async function uploadTelemetry(snapshot) {
@@ -545,7 +745,7 @@ async function refreshTelemetry() {
   if (collecting) return;
   collecting = true;
   try {
-    latestTelemetry = collectTelemetry();
+    latestTelemetry = await collectTelemetry();
     await uploadTelemetry(latestTelemetry);
   } finally {
     collecting = false;
