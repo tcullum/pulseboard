@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getChatGPTUser } from "../../chatgpt-auth";
-import { getLatestTelemetry, saveLatestTelemetry } from "../../../db/telemetry";
+import { getLatestTelemetry, listTelemetryDevices, saveLatestTelemetry, telemetryDeviceId } from "../../../db/telemetry";
 
 export const dynamic = "force-dynamic";
 
@@ -30,16 +30,32 @@ function isTelemetryPayload(value: unknown): value is { timestamp: string; devic
   return typeof payload.timestamp === "string" && !!payload.device && !!payload.cpu && !!payload.memory;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Authentication required" }, { status: 401 });
 
-  const row = await getLatestTelemetry();
+  const requestedDevice = new URL(request.url).searchParams.get("device");
+  const [row, deviceRows] = await Promise.all([getLatestTelemetry(requestedDevice), listTelemetryDevices()]);
   if (!row) return Response.json({ error: "No telemetry received yet" }, { status: 404 });
 
   const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(row.received_at)) / 1000));
+  const devices = deviceRows.results.map((deviceRow) => {
+    const telemetry = JSON.parse(deviceRow.payload) as { device?: { id?: string; name?: string; platform?: string; os?: string; chip?: string } };
+    const rowAgeSeconds = Math.max(0, Math.round((Date.now() - Date.parse(deviceRow.received_at)) / 1000));
+    return {
+      id: deviceRow.device_id || telemetry.device?.id || telemetryDeviceId(deviceRow.payload),
+      name: telemetry.device?.name || "Pulseboard device",
+      platform: telemetry.device?.platform || "macos",
+      os: telemetry.device?.os || "",
+      chip: telemetry.device?.chip || "",
+      receivedAt: deviceRow.received_at,
+      ageSeconds: rowAgeSeconds,
+      stale: rowAgeSeconds > 30,
+    };
+  });
   return Response.json({
     telemetry: JSON.parse(row.payload),
+    devices,
     source: "relay",
     receivedAt: row.received_at,
     ageSeconds,
@@ -64,6 +80,7 @@ export async function POST(request: Request) {
   try { payload = JSON.parse(text); } catch { return Response.json({ error: "Invalid JSON" }, { status: 400 }); }
   if (!isTelemetryPayload(payload)) return Response.json({ error: "Invalid telemetry payload" }, { status: 400 });
 
-  const receivedAt = await saveLatestTelemetry(JSON.stringify(payload), payload.timestamp);
+  const serialized = JSON.stringify(payload);
+  const receivedAt = await saveLatestTelemetry(serialized, payload.timestamp, telemetryDeviceId(serialized));
   return Response.json({ ok: true, receivedAt }, { status: 202 });
 }

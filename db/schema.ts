@@ -6,3 +6,10 @@ export const telemetrySnapshots = sqliteTable("telemetry_snapshots", {
   capturedAt: text("captured_at").notNull(),
   receivedAt: text("received_at").notNull(),
 });
+
+export const telemetryDevices = sqliteTable("telemetry_devices", {
+  deviceId: text("device_id").primaryKey(),
+  payload: text("payload").notNull(),
+  capturedAt: text("captured_at").notNull(),
+  receivedAt: text("received_at").notNull(),
+});

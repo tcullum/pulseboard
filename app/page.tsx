@@ -13,7 +13,7 @@ type ProcessItem = {
 
 type Telemetry = {
   timestamp: string;
-  device: { name: string; model: string; chip: string; os: string; logicalCores: number; performanceCores: number; efficiencyCores: number };
+  device: { id?: string; name: string; model: string; chip: string; os: string; platform?: "macos" | "windows" | string; role?: string; logicalCores: number; performanceCores: number; efficiencyCores: number };
   cpu: { usage: number; previous: number };
   memory: { totalBytes: number; usedBytes: number; freeBytes: number; wiredBytes: number; compressedBytes: number; pressure: "Low" | "Medium" | "High" };
   disk: { name: string; totalBytes: number; usedBytes: number; freeBytes: number; percent: number };
@@ -22,6 +22,17 @@ type Telemetry = {
   network: { interface: string; address: string; downloadBytesPerSecond: number; uploadBytesPerSecond: number };
   uptimeSeconds: number;
   processes: { total: number; running: number; items: ProcessItem[] };
+  plex?: { available: boolean; status: string; processes: number; cpu: number; memoryBytes: number; detail: string };
+};
+
+type TelemetryDevice = {
+  id: string;
+  name: string;
+  platform: string;
+  os: string;
+  chip: string;
+  ageSeconds: number;
+  stale: boolean;
 };
 
 type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
@@ -216,6 +227,14 @@ function speedQuality(download: number) {
   return "Limited";
 }
 
+function deviceId(telemetry: Telemetry) {
+  return telemetry.device.id || `${telemetry.device.platform || "device"}-${telemetry.device.name}`.toLowerCase().replace(/[^a-z0-9._-]+/g, "-");
+}
+
+function platformLabel(platform?: string) {
+  return platform === "windows" ? "Windows" : platform === "macos" ? "Mac" : "Device";
+}
+
 export default function Home() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
@@ -229,6 +248,8 @@ export default function Home() {
   const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
   const [theme, setTheme] = useState<"night" | "day">("night");
+  const [selectedDeviceId, setSelectedDeviceId] = useState("local");
+  const [relayDevices, setRelayDevices] = useState<TelemetryDevice[]>([]);
   const fetchInFlight = useRef<Promise<void> | null>(null);
   const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
   const [speedResult, setSpeedResult] = useState<SpeedResult | null>(null);
@@ -243,7 +264,7 @@ export default function Home() {
   const [iperf3Servers, setIperf3Servers] = useState<Iperf3Server[]>(FALLBACK_IPERF3_SERVERS);
   const [iperf3ServerId, setIperf3ServerId] = useState(IPERF3_DEFAULT_SERVER_ID);
   const [iperf3Status, setIperf3Status] = useState<"unchecked" | "checking" | "ready" | "missing" | "unreachable">("unchecked");
-  const [iperf3Message, setIperf3Message] = useState("Select iPerf3 to check the Mac companion.");
+  const [iperf3Message, setIperf3Message] = useState("Select iPerf3 to check the local companion.");
   const [speedError, setSpeedError] = useState("");
   const speedTestController = useRef<AbortController | null>(null);
   const speedUploadRequests = useRef<XMLHttpRequest[]>([]);
@@ -260,19 +281,36 @@ export default function Home() {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 1000);
       try {
-        const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
-        if (!response.ok) throw new Error("Companion unavailable");
-        const next = await response.json() as Telemetry;
-        setTelemetry(next);
-        setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
-        setStatus("live");
-        setTransport("direct");
-        setRelayAgeSeconds(0);
+        if (selectedDeviceId === "local") {
+          const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
+          if (!response.ok) throw new Error("Companion unavailable");
+          const next = await response.json() as Telemetry;
+          setTelemetry(next);
+          setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
+          setStatus("live");
+          setTransport("direct");
+          setRelayAgeSeconds(0);
+          setRelayDevices((devices) => {
+            const local = { id: deviceId(next), name: next.device.name, platform: next.device.platform || "macos", os: next.device.os, chip: next.device.chip, ageSeconds: 0, stale: false };
+            return [local, ...devices.filter((device) => device.id !== local.id)];
+          });
+          void fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" })
+            .then(async (relayResponse) => {
+              if (!relayResponse.ok) return;
+              const relay = await relayResponse.json() as { devices?: TelemetryDevice[] };
+              if (relay.devices) setRelayDevices((devices) => [...devices, ...relay.devices!].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index));
+            })
+            .catch(() => {});
+          return;
+        }
+        throw new Error("Relay device selected");
       } catch {
         try {
-          const relayResponse = await fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" });
+          const relayUrl = selectedDeviceId === "local" ? "/api/telemetry" : `/api/telemetry?device=${encodeURIComponent(selectedDeviceId)}`;
+          const relayResponse = await fetch(relayUrl, { cache: "no-store", credentials: "same-origin" });
           if (!relayResponse.ok) throw new Error("Relay unavailable");
-          const relay = await relayResponse.json() as { telemetry: Telemetry; ageSeconds: number; stale: boolean };
+          const relay = await relayResponse.json() as { telemetry: Telemetry; devices?: TelemetryDevice[]; ageSeconds: number; stale: boolean };
+          if (relay.devices) setRelayDevices(relay.devices);
           setTelemetry(relay.telemetry);
           setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
           setStatus("live");
@@ -292,7 +330,7 @@ export default function Home() {
       if (fetchInFlight.current === request) fetchInFlight.current = null;
     });
     return request;
-  }, []);
+  }, [selectedDeviceId]);
 
   const runSpeedTest = useCallback(async () => {
     if (speedTestController.current) {
@@ -322,7 +360,7 @@ export default function Home() {
       }
 
       setSpeedMeta({
-        clientIp: "This Mac",
+        clientIp: "This machine",
         service: `${selectedServer.city} · ${selectedServer.provider}`,
         location: `${selectedServer.host}:${selectedServer.ports.join("/")}`,
         country: selectedServer.country,
@@ -355,12 +393,12 @@ export default function Home() {
         });
         const payload = await response.json().catch(() => null) as { result?: SpeedResult; server?: Iperf3Server; port?: number | string; error?: string } | null;
         if (!response.ok || !payload?.result) {
-          throw new Error(payload?.error || "The Mac companion could not run the iPerf3 test.");
+          throw new Error(payload?.error || "The local companion could not run the iPerf3 test.");
         }
         const server = payload.server ?? selectedServer;
         const result = payload.result;
         setSpeedMeta({
-          clientIp: "This Mac",
+          clientIp: "This machine",
           service: `${server.city} · ${server.provider}`,
           location: `${server.host}:${payload.port ?? server.ports[0]}`,
           country: server.country,
@@ -395,7 +433,7 @@ export default function Home() {
       : speedServer === "custom" && customSpeedServer.trim()
         ? normalizeSpeedBase(customSpeedServer)
         : "/api/speed-test";
-    const serverName = speedServer === "mac" ? "This Mac companion" : speedServer === "custom" ? "Custom server" : "Pulseboard edge";
+    const serverName = speedServer === "mac" ? "Local companion" : speedServer === "custom" ? "Custom server" : "Pulseboard edge";
     const customFailureMessage = "Custom server is unreachable or does not expose the Pulseboard speed-test API with HTTPS and CORS enabled.";
     setSpeedMeta({
       clientIp: speedServer === "mac" ? "This browser" : speedServer === "custom" ? "This device" : "This device",
@@ -663,6 +701,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
+    setSelectedDeviceId(window.localStorage.getItem("pulseboard-device") || "local");
     if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
     const savedServer = window.localStorage.getItem("pulseboard-speed-server");
     if (savedServer === "mac" || savedServer === "custom" || savedServer === "iperf3") setSpeedServer(savedServer);
@@ -689,6 +728,10 @@ export default function Home() {
   }, [theme]);
 
   useEffect(() => {
+    window.localStorage.setItem("pulseboard-device", selectedDeviceId);
+  }, [selectedDeviceId]);
+
+  useEffect(() => {
     window.localStorage.setItem("pulseboard-speed-unit", speedUnit);
   }, [speedUnit]);
 
@@ -710,7 +753,7 @@ export default function Home() {
     const checkingTimer = window.setTimeout(() => {
       if (cancelled) return;
       setIperf3Status("checking");
-      setIperf3Message("Checking the Mac companion for native iPerf3…");
+      setIperf3Message("Checking the local companion for native iPerf3…");
     }, 0);
     fetch(IPERF3_SERVERS_URL, { cache: "no-store", mode: "cors" })
       .then(async (response) => {
@@ -718,7 +761,7 @@ export default function Home() {
         if (cancelled) return;
         if (!response.ok || !payload.available) {
           setIperf3Status("missing");
-          setIperf3Message(payload.error || "Install iperf3 on this Mac to run public server tests.");
+          setIperf3Message(payload.error || "Install iperf3 on this machine to run public server tests.");
           if (payload.servers?.length) setIperf3Servers(payload.servers);
           return;
         }
@@ -731,7 +774,7 @@ export default function Home() {
       .catch(() => {
         if (cancelled) return;
         setIperf3Status("unreachable");
-        setIperf3Message("The iPerf3 picker works only from this Mac for now. Mobile control is not enabled.");
+        setIperf3Message("The iPerf3 picker works only from the local companion for now. Remote control is not enabled.");
       });
     return () => {
       cancelled = true;
@@ -766,6 +809,19 @@ export default function Home() {
   const compressedPercent = telemetry ? telemetry.memory.compressedBytes / telemetry.memory.totalBytes * 100 : 0;
   const appPercent = Math.max(0, memoryUsedPercent - wiredPercent - compressedPercent);
   const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
+  const activePlatform = telemetry?.device.platform || "macos";
+  const activePlatformName = platformLabel(activePlatform);
+  const activeRole = telemetry?.device.role || (activePlatform === "windows" ? "Windows 11 Plex client" : "MacBook");
+  const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
+  const headline = status === "live"
+    ? isHealthy
+      ? `${activeRole} is running smoothly.`
+      : `${activeRole} needs attention.`
+    : `Connect your ${selectedDeviceId === "local" ? "local companion" : activeRole} to begin.`;
+  const deviceOptions = [
+    { id: "local", name: "This machine", platform: "local", os: "127.0.0.1 companion", chip: "Direct" },
+    ...relayDevices,
+  ].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index);
   const isSpeedRunning = ["ping", "download", "upload"].includes(speedStage);
   const speedDisplay = speedResult ?? speedPartial;
   const primarySpeed = isSpeedRunning && speedStage !== "ping" ? currentSpeed : speedStage === "upload" && speedDisplay.upload ? speedDisplay.upload : speedDisplay.download ?? 0;
@@ -775,8 +831,8 @@ export default function Home() {
   const loadedDelta = speedDisplay.loadedLatency && speedDisplay.ping ? Math.max(speedDisplay.loadedLatency - speedDisplay.ping, 0) : 0;
   const speedTicks = [0, 500, 1000, 1500, 2000, 2500, 3000];
   const selectedIperf3Server = iperf3Servers.find((server) => server.id === iperf3ServerId) ?? iperf3Servers[0];
-  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "This Mac companion" : speedServer === "iperf3" ? "Public iPerf3 server" : "Custom endpoint";
-  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this Mac" : speedServer === "iperf3" && selectedIperf3Server ? `${selectedIperf3Server.city}, ${selectedIperf3Server.country} · ${selectedIperf3Server.provider}` : "Selected by viewer location";
+  const speedServerLabel = speedServer === "auto" ? "Auto nearest edge" : speedServer === "mac" ? "Local companion" : speedServer === "iperf3" ? "Public iPerf3 server" : "Custom endpoint";
+  const speedServerDetail = speedMeta?.location ? `${speedMeta.location}${speedMeta.country ? ` · ${speedMeta.country}` : ""}` : speedServer === "mac" ? "Local companion on this machine" : speedServer === "iperf3" && selectedIperf3Server ? `${selectedIperf3Server.city}, ${selectedIperf3Server.country} · ${selectedIperf3Server.provider}` : "Selected by viewer location";
   const canRunSpeedTest = speedServer === "custom" ? Boolean(customSpeedServer.trim()) : speedServer === "iperf3" ? iperf3Status === "ready" : true;
   const stageOrder = { idle: -1, ping: 0, download: 1, upload: 2, complete: 3, error: -1 }[speedStage];
   const phaseIcon = (stage: "ping" | "download" | "upload", index: number) => {
@@ -806,10 +862,18 @@ export default function Home() {
         <header className="topbar">
           <div className="deviceLockup">
             <div className="deviceIcon" aria-hidden="true"><span /></div>
-            <div><p>{telemetry?.device.name || "Waiting for your Mac"}</p><span>{telemetry ? `${telemetry.device.chip} · ${gb(telemetry.memory.totalBytes, 0)} GB · ${telemetry.device.os}` : "Pulseboard Companion"}</span></div>
+            <div><p>{telemetry?.device.name || "Waiting for companion"}</p><span>{telemetry ? `${telemetry.device.chip} · ${gb(telemetry.memory.totalBytes, 0)} GB · ${telemetry.device.os}` : "Pulseboard Companion"}</span></div>
+          </div>
+          <div className="clientSwitch" aria-label="Pulseboard client">
+            {deviceOptions.map((device) => (
+              <button key={device.id} className={selectedDeviceId === device.id ? "selected" : ""} onClick={() => { setStatus("connecting"); setSelectedDeviceId(device.id); }}>
+                <span>{device.id === "local" ? "Local" : platformLabel(device.platform)}</span>
+                <b>{device.name}</b>
+              </button>
+            ))}
           </div>
           <div className="topActions">
-            <div className={`health ${isHealthy ? "" : status === "offline" ? "offline" : "attention"}`}><i /> {status === "offline" ? "Mac feed offline" : isHealthy ? "All systems normal" : "Checking system"}</div>
+            <div className={`health ${isHealthy ? "" : status === "offline" ? "offline" : "attention"}`}><i /> {connectionLabel}</div>
             <button className="themeButton" aria-label={theme === "night" ? "Switch to day mode" : "Switch to night mode"} aria-pressed={theme === "day"} onClick={() => setTheme((current) => current === "night" ? "day" : "night")}><span aria-hidden="true">{theme === "night" ? "☀" : "☾"}</span><b>{theme === "night" ? "Day mode" : "Night mode"}</b></button>
             <button className="pauseButton" onClick={() => setPaused((value) => !value)} disabled={status === "offline"}>{paused ? "Resume live" : "Pause live"}</button>
           </div>
@@ -819,13 +883,13 @@ export default function Home() {
           {status === "offline" && (
             <section className="connectionBanner" role="status">
               <div className="connectionIcon">P</div>
-              <div><b>No live Mac feed is available</b><span>Make sure your Mac is awake and the Pulseboard Companion is running. Mobile devices connect through the encrypted relay.</span></div>
+              <div><b>No live {activePlatformName} feed is available</b><span>Make sure the selected machine is awake and the Pulseboard Companion is running. Remote viewing uses the encrypted relay.</span></div>
               <button onClick={() => { setStatus("connecting"); void fetchTelemetry(); }}>Retry connection</button>
             </section>
           )}
 
           <section className="headingRow scrollTarget" id="overview">
-            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{status === "live" ? (isHealthy ? "Your Mac is running smoothly." : "Your Mac needs attention.") : "Connect your Mac to begin."}</h1><p className="subhead">Real performance and health, directly from macOS.</p></div>
+            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from your MacBook and Windows 11 Plex client.</p></div>
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
@@ -866,7 +930,7 @@ export default function Home() {
 
           <section className="lowerGrid">
             <article className="card processCard scrollTarget" id="processes">
-              <div className="sectionHeader"><div><p className="label">TOP PROCESSES</p><h2>What&apos;s using your Mac</h2></div><div className="segmented"><button className={sort === "cpu" ? "selected" : ""} onClick={() => setSort("cpu")}>CPU</button><button className={sort === "memory" ? "selected" : ""} onClick={() => setSort("memory")}>Memory</button></div></div>
+              <div className="sectionHeader"><div><p className="label">TOP PROCESSES</p><h2>What&apos;s using {telemetry?.device.name || "this machine"}</h2></div><div className="segmented"><button className={sort === "cpu" ? "selected" : ""} onClick={() => setSort("cpu")}>CPU</button><button className={sort === "memory" ? "selected" : ""} onClick={() => setSort("memory")}>Memory</button></div></div>
               <div className="processTable">
                 <div className="tableHead"><span>PROCESS</span><span>PID</span><span>CPU</span><span>MEMORY</span><span>ENERGY</span></div>
                 {processes.slice(0, 5).map((process, index) => (
@@ -877,7 +941,7 @@ export default function Home() {
                 ))}
                 {!processes.length && <div className="emptyTable">Start the companion to load running processes.</div>}
               </div>
-              <div className="localOnly">Process data stays on this Mac</div>
+              <div className="localOnly">Process data stays with the selected Pulseboard client</div>
             </article>
 
             <div className="sideStack">
@@ -886,6 +950,16 @@ export default function Home() {
                 <div className="storageLead"><b>{gb(telemetry?.disk.freeBytes, 0)} GB</b><span>free of {gb(telemetry?.disk.totalBytes, 0)} GB</span></div>
                 <div className="storageBar simple"><i style={{ width: `${telemetry?.disk.percent || 0}%` }} /></div>
                 <div className="storageFacts"><div><span>Used</span><b>{gb(telemetry?.disk.usedBytes, 0)} GB</b></div><div><span>Available</span><b>{gb(telemetry?.disk.freeBytes, 0)} GB</b></div><div><span>Volume used</span><b>{telemetry?.disk.percent || 0}%</b></div></div>
+              </article>
+
+              <article className="card plexCard scrollTarget" id="plex">
+                <div className="cardHeader"><div><p className="label">PLEX CLIENT</p><h2>{telemetry?.plex?.status || (activePlatform === "windows" ? "Waiting for Plex" : "Windows companion")}</h2></div><span className={`plexBadge ${telemetry?.plex?.available ? "online" : ""}`}>{telemetry?.plex?.available ? "Active" : "Idle"}</span></div>
+                <p>{telemetry?.plex?.detail || "Switch to the Windows 11 client to monitor Plex or Plexamp activity."}</p>
+                <div className="plexStats">
+                  <div><span>Processes</span><b>{telemetry?.plex?.processes || 0}</b></div>
+                  <div><span>CPU</span><b>{telemetry?.plex?.cpu?.toFixed(1) || "0.0"}%</b></div>
+                  <div><span>Memory</span><b>{gb(telemetry?.plex?.memoryBytes || 0)} GB</b></div>
+                </div>
               </article>
 
               <article className="card batteryCard">
@@ -916,7 +990,7 @@ export default function Home() {
                   <span>Server</span>
                   <select value={speedServer} onChange={(event) => setSpeedServer(event.target.value as SpeedServerChoice)} aria-label="Speed test server">
                     <option value="auto">Auto nearest edge</option>
-                    <option value="mac">This Mac companion</option>
+                    <option value="mac">Local companion</option>
                     <option value="iperf3">Public iPerf3 server</option>
                     <option value="custom">Custom endpoint</option>
                   </select>
@@ -980,7 +1054,7 @@ export default function Home() {
                 <span>{speedServerDetail}</span>
               </div>
               {speedError && <p className="speedError" role="status">{speedError}</p>}
-              <small>{speedServer === "iperf3" ? "Runs from this Mac with native iPerf3 against the selected public server. iPhone control is intentionally disabled for now." : "Runs about 25 seconds. Custom servers must expose the Pulseboard speed-test API with browser access enabled."}</small>
+              <small>{speedServer === "iperf3" ? "Runs from this machine with native iPerf3 against the selected public server. Remote control is intentionally disabled for now." : "Runs about 25 seconds. Custom servers must expose the Pulseboard speed-test API with browser access enabled."}</small>
             </div>
             {speedHistory.length > 0 && (
               <div className="speedHistory">
@@ -993,7 +1067,7 @@ export default function Home() {
               </div>
             )}
           </section>
-          <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for your Mac"}</span></footer>
+          <footer><span>Pulseboard · Real telemetry · {transport === "relay" ? "Encrypted relay" : transport === "direct" ? "Direct local" : "Disconnected"}</span><span>{telemetry ? `${telemetry.device.os} · ${telemetry.device.model}` : "Waiting for companion"}</span></footer>
         </div>
       </section>
 
@@ -1010,11 +1084,11 @@ export default function Home() {
               </div>
             </div>
             <div className="settingGroup connectionSetting">
-              <div><b>Mac companion</b><span>Runs quietly in the background, starts automatically, and securely relays metrics to your mobile devices.</span></div>
+              <div><b>Selected companion</b><span>Runs quietly in the background and securely relays metrics from each registered machine.</span></div>
               <div className={`connectionPill ${status}`}><i />{status === "live" ? (transport === "relay" ? "Relay connected" : "Direct connected") : status === "connecting" ? "Connecting" : "Offline"}</div>
               <button className="settingsAction" onClick={() => { setStatus("connecting"); void fetchTelemetry(); }}>Reconnect now</button>
             </div>
-            <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Direct viewing stays on your Mac. Mobile viewing uses an authenticated encrypted relay that keeps only the newest telemetry snapshot.</span></div></div>
+            <div className="privacyNote"><Mark>⌁</Mark><div><b>Private by design</b><span>Direct viewing stays on the local machine. Remote viewing uses an authenticated encrypted relay that keeps only the newest telemetry snapshot per client.</span></div></div>
             <div className="settingsFooter"><span>Current connection</span><code>{transport === "relay" ? "Encrypted cloud relay" : transport === "direct" ? "127.0.0.1:4319" : "Not connected"}</code></div>
           </section>
         </div>

@@ -12,11 +12,11 @@ export async function generateMetadata(): Promise<Metadata> {
   const protocol = host.includes("localhost") ? "http" : "https";
   const origin = `${protocol}://${host}`;
   return {
-    title: "Pulseboard — Mac System Monitor",
-    description: "A polished, real-time overview of your Mac's performance, health, storage, battery, and processes.",
+    title: "Pulseboard - Mac and Windows Monitor",
+    description: "A polished, real-time overview of your MacBook and Windows 11 Plex client's performance, health, storage, and processes.",
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title: "Pulseboard — Your Mac, at a glance", description: "Performance, health, storage, battery, and processes in one calm command center.", images: [`${origin}/og.png`] },
-    twitter: { card: "summary_large_image", title: "Pulseboard — Your Mac, at a glance", description: "A professional system monitor for macOS.", images: [`${origin}/og.png`] },
+    openGraph: { title: "Pulseboard - Mac and Windows, at a glance", description: "Switch between your MacBook and Windows 11 Plex client in one calm command center.", images: [`${origin}/og.png`] },
+    twitter: { card: "summary_large_image", title: "Pulseboard - Mac and Windows, at a glance", description: "A professional system monitor for your MacBook and Windows Plex client.", images: [`${origin}/og.png`] },
   };
 }
 

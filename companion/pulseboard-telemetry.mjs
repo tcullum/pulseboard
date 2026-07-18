@@ -16,7 +16,11 @@ const IPERF3_DURATION_SECONDS = 8;
 const IPERF3_OMIT_SECONDS = 1;
 const IPERF3_PARALLEL_STREAMS = 4;
 const IPERF3_TIMEOUT_MS = 22_000;
-const CONFIG_PATH = path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
+const isWindows = process.platform === "win32";
+const isMac = process.platform === "darwin";
+const CONFIG_PATH = isWindows
+  ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "Pulseboard", "relay.json")
+  : path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json");
 const ALLOWED_ORIGINS = new Set([
   "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
   "http://localhost:3000",
@@ -69,17 +73,43 @@ const IPERF3_SERVERS = [
   { id: "us-washington-leaseweb-43", city: "Washington", country: "US", provider: "LeaseWeb", host: "speedtest.wdc2.us.leaseweb.net", ports: [5201, 5202, 5203, 5204], capacity: "10" },
 ];
 
-function run(command, args = []) {
+function run(command, args = [], timeout = 2500) {
   try {
-    return execFileSync(command, args, { encoding: "utf8", timeout: 2500, maxBuffer: 2 * 1024 * 1024 }).trim();
+    return execFileSync(command, args, { encoding: "utf8", timeout, maxBuffer: 2 * 1024 * 1024 }).trim();
   } catch {
     return "";
   }
 }
 
+function powershell(script, timeout = 3500) {
+  if (!isWindows) return "";
+  return run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout);
+}
+
+function powershellJson(script) {
+  const output = powershell(`${script} | ConvertTo-Json -Depth 5 -Compress`);
+  if (!output) return null;
+  try {
+    return JSON.parse(output);
+  } catch {
+    return null;
+  }
+}
+
+function stableDeviceId(platform, name) {
+  return `${platform}-${name || os.hostname()}`.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function usefulSystemText(value, fallback = "") {
+  const text = String(value || "").trim();
+  return text && !/^default string$/i.test(text) && !/^system product name$/i.test(text) ? text : fallback;
+}
+
 function findIperf3() {
   const candidates = [
     process.env.IPERF3_PATH,
+    "C:\\Program Files\\iperf3\\iperf3.exe",
+    "C:\\Program Files (x86)\\iperf3\\iperf3.exe",
     "/opt/homebrew/bin/iperf3",
     "/usr/local/bin/iperf3",
     "/usr/bin/iperf3",
@@ -138,6 +168,7 @@ function spawnText(command, args, { timeoutMs = IPERF3_TIMEOUT_MS, signal } = {}
 }
 
 function sysctl(key, fallback = "") {
+  if (!isMac) return fallback;
   return run("/usr/sbin/sysctl", ["-n", key]) || fallback;
 }
 
@@ -167,6 +198,15 @@ function cpuUsage() {
 }
 
 function vmStats() {
+  if (isWindows) {
+    const total = os.totalmem();
+    const free = os.freemem();
+    const used = Math.max(0, total - free);
+    const freeRatio = total ? free / total : 0;
+    const pressure = freeRatio >= 0.25 ? "Low" : freeRatio >= 0.12 ? "Medium" : "High";
+    return { totalBytes: total, usedBytes: used, freeBytes: free, wiredBytes: 0, compressedBytes: 0, pressure };
+  }
+
   const output = run("/usr/bin/vm_stat");
   const pageSize = Number(output.match(/page size of (\d+) bytes/)?.[1] || 16384);
   const values = {};
@@ -186,6 +226,15 @@ function vmStats() {
 }
 
 function diskStats() {
+  if (isWindows) {
+    const disk = powershellJson("Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='C:'\" | Select-Object DeviceID,VolumeName,Size,FreeSpace");
+    const totalBytes = Number(disk?.Size || 0);
+    const freeBytes = Number(disk?.FreeSpace || 0);
+    const usedBytes = Math.max(0, totalBytes - freeBytes);
+    const name = `${disk?.VolumeName || "Windows"} (${disk?.DeviceID || "C:"})`;
+    return { name, totalBytes, usedBytes, freeBytes, percent: totalBytes ? Number((usedBytes / totalBytes * 100).toFixed(1)) : 0 };
+  }
+
   const lines = run("/bin/df", ["-k", "/System/Volumes/Data"]).split("\n");
   const columns = lines.at(-1)?.trim().split(/\s+/) || [];
   const totalBytes = Number(columns[1] || 0) * 1024;
@@ -195,6 +244,22 @@ function diskStats() {
 }
 
 function batteryStats() {
+  if (isWindows) {
+    const battery = powershellJson("Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus");
+    const percent = Number(battery?.EstimatedChargeRemaining || 0);
+    const status = Number(battery?.BatteryStatus || 0);
+    const state = status === 2 ? "Charging" : status === 1 ? "Discharging" : percent ? "Battery present" : "Unavailable";
+    return {
+      percent,
+      state,
+      timeRemainingMinutes: null,
+      cycleCount: 0,
+      healthPercent: percent ? 100 : 0,
+      condition: percent ? "Normal" : "Desktop power",
+      powerWatts: null,
+    };
+  }
+
   const pmset = run("/usr/bin/pmset", ["-g", "batt"]);
   const ioreg = run("/usr/sbin/ioreg", ["-rc", "AppleSmartBattery"]);
   const percent = Number(pmset.match(/(\d+)%/)?.[1] || 0);
@@ -218,6 +283,10 @@ function batteryStats() {
 }
 
 function thermalStats() {
+  if (isWindows) {
+    return { status: "Normal", speedLimit: 100 };
+  }
+
   const output = run("/usr/bin/pmset", ["-g", "therm"]);
   const warning = /warning level/i.test(output) && !/No thermal warning/i.test(output);
   const speedLimit = Number(output.match(/CPU_Speed_Limit\s*=\s*(\d+)/)?.[1] || 100);
@@ -225,6 +294,22 @@ function thermalStats() {
 }
 
 function networkStats() {
+  if (isWindows) {
+    const networkEntries = Object.entries(os.networkInterfaces()).flatMap(([name, entries]) => (entries || []).map((entry) => ({ name, entry })));
+    const active = networkEntries.find(({ entry }) => entry.family === "IPv4" && !entry.internal);
+    const interfaceName = active?.name || "Ethernet";
+    const address = active?.entry.address || "Unavailable";
+    const adapter = powershellJson(`Get-NetAdapterStatistics -Name '${interfaceName.replace(/'/g, "''")}' -ErrorAction SilentlyContinue | Select-Object ReceivedBytes,SentBytes`);
+    const current = { received: Number(adapter?.ReceivedBytes || 0), sent: Number(adapter?.SentBytes || 0) };
+    const now = Date.now();
+    const elapsed = Math.max(0.25, (now - previousNetworkAt) / 1000);
+    const downloadBytesPerSecond = previousNetwork ? Math.max(0, (current.received - previousNetwork.received) / elapsed) : 0;
+    const uploadBytesPerSecond = previousNetwork ? Math.max(0, (current.sent - previousNetwork.sent) / elapsed) : 0;
+    previousNetwork = current;
+    previousNetworkAt = now;
+    return { interface: interfaceName, address, downloadBytesPerSecond, uploadBytesPerSecond };
+  }
+
   const route = run("/sbin/route", ["-n", "get", "default"]);
   const interfaceName = route.match(/interface:\s*(\S+)/)?.[1] || "en0";
   const address = (os.networkInterfaces()[interfaceName] || []).find((entry) => entry.family === "IPv4" && !entry.internal)?.address || "Unavailable";
@@ -242,6 +327,25 @@ function networkStats() {
 }
 
 function processStats() {
+  if (isWindows) {
+    const rows = powershellJson("Get-CimInstance Win32_PerfFormattedData_PerfProc_Process | Where-Object { $_.Name -ne '_Total' -and $_.Name -ne 'Idle' } | Sort-Object PercentProcessorTime -Descending | Select-Object -First 12 Name,IDProcess,PercentProcessorTime,WorkingSet,ThreadCount");
+    const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
+    const processCount = Number(powershell("(Get-Process).Count") || list.length);
+    const items = list.map((item) => {
+      const cpu = Number(item.PercentProcessorTime || 0);
+      return {
+        pid: String(item.IDProcess || ""),
+        cpu,
+        memoryBytes: Number(item.WorkingSet || 0),
+        state: Number(item.ThreadCount || 0) > 0 ? "R" : "S",
+        name: String(item.Name || "Process"),
+        detail: Number(item.ThreadCount || 0) > 0 ? `${item.ThreadCount} threads` : "Background",
+        energy: cpu >= 15 ? "High" : cpu >= 5 ? "Medium" : "Low",
+      };
+    });
+    return { total: processCount, running: items.filter((item) => item.state.startsWith("R")).length, items };
+  }
+
   const output = run("/bin/ps", ["-axo", "pid=,pcpu=,rss=,state=,comm="]);
   const rows = output.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
     const match = line.match(/^(\d+)\s+([\d.]+)\s+(\d+)\s+(\S+)\s+(.+)$/);
@@ -264,17 +368,65 @@ function getSpeedBuffer() {
   return speedBuffer;
 }
 
-const staticDevice = {
-  name: run("/usr/sbin/scutil", ["--get", "ComputerName"]) || os.hostname(),
-  model: sysctl("hw.model", "Mac"),
-  chip: sysctl("machdep.cpu.brand_string", os.cpus()[0]?.model || "Apple Silicon"),
-  os: `${run("/usr/bin/sw_vers", ["-productName"])} ${run("/usr/bin/sw_vers", ["-productVersion"])}`.trim(),
-  logicalCores: Number(sysctl("hw.logicalcpu", String(os.cpus().length))),
-  performanceCores: Number(sysctl("hw.perflevel0.physicalcpu", "0")),
-  efficiencyCores: Number(sysctl("hw.perflevel1.physicalcpu", "0")),
-};
+function windowsDevice() {
+  const system = powershellJson("Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,Name");
+  const osInfo = powershellJson("Get-CimInstance Win32_OperatingSystem | Select-Object Caption,Version");
+  const cpu = powershellJson("Get-CimInstance Win32_Processor | Select-Object -First 1 Name,NumberOfCores,NumberOfLogicalProcessors");
+  const name = String(system?.Name || process.env.COMPUTERNAME || os.hostname());
+  const manufacturer = usefulSystemText(system?.Manufacturer, "Windows PC");
+  const model = usefulSystemText(system?.Model, "Plex client");
+  return {
+    id: stableDeviceId("windows", name),
+    name,
+    model: `${manufacturer} ${model}`.trim(),
+    chip: String(cpu?.Name || os.cpus()[0]?.model || "Windows CPU"),
+    os: `${osInfo?.Caption || "Windows"} ${osInfo?.Version || os.release()}`.trim(),
+    platform: "windows",
+    role: "Windows 11 Plex client",
+    logicalCores: Number(cpu?.NumberOfLogicalProcessors || os.cpus().length),
+    performanceCores: Number(cpu?.NumberOfCores || os.cpus().length),
+    efficiencyCores: 0,
+  };
+}
+
+function macDevice() {
+  const name = run("/usr/sbin/scutil", ["--get", "ComputerName"]) || os.hostname();
+  return {
+    id: stableDeviceId("macos", name),
+    name,
+    model: sysctl("hw.model", "Mac"),
+    chip: sysctl("machdep.cpu.brand_string", os.cpus()[0]?.model || "Apple Silicon"),
+    os: `${run("/usr/bin/sw_vers", ["-productName"])} ${run("/usr/bin/sw_vers", ["-productVersion"])}`.trim(),
+    platform: "macos",
+    role: "MacBook",
+    logicalCores: Number(sysctl("hw.logicalcpu", String(os.cpus().length))),
+    performanceCores: Number(sysctl("hw.perflevel0.physicalcpu", "0")),
+    efficiencyCores: Number(sysctl("hw.perflevel1.physicalcpu", "0")),
+  };
+}
+
+const staticDevice = isWindows ? windowsDevice() : macDevice();
+
+function plexStats(processes) {
+  if (!isWindows) {
+    return { available: false, status: "Mac companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex client companion runs on Windows." };
+  }
+  const items = processes.items.filter((item) => /plex/i.test(item.name));
+  const cpu = items.reduce((total, item) => total + item.cpu, 0);
+  const memoryBytes = items.reduce((total, item) => total + item.memoryBytes, 0);
+  const player = items.find((item) => /plex|plexamp/i.test(item.name));
+  return {
+    available: items.length > 0,
+    status: items.length ? "Detected" : "Not running",
+    processes: items.length,
+    cpu: Number(cpu.toFixed(1)),
+    memoryBytes,
+    detail: player ? `${player.name} is active on this Windows client.` : "Start Plex or Plexamp and Pulseboard will pick it up.",
+  };
+}
 
 function collectTelemetry() {
+  const processes = processStats();
   return {
     timestamp: new Date().toISOString(),
     device: staticDevice,
@@ -285,7 +437,8 @@ function collectTelemetry() {
     thermal: thermalStats(),
     network: networkStats(),
     uptimeSeconds: os.uptime(),
-    processes: processStats(),
+    processes,
+    plex: plexStats(processes),
   };
 }
 
@@ -354,7 +507,7 @@ function handleSpeedTest(request, response, headers, url) {
     response.writeHead(200, { "Content-Type": "application/json", ...headers });
     response.end(JSON.stringify({
       clientIp: "This browser",
-      service: "This Mac companion",
+      service: `This ${isWindows ? "Windows" : "Mac"} companion`,
       location: `127.0.0.1:${PORT}`,
       country: "",
     }));
@@ -432,7 +585,9 @@ function handleSpeedTest(request, response, headers, url) {
 }
 
 function pingStats(host) {
-  const output = run("/sbin/ping", ["-c", "4", "-n", "-W", "1000", host]);
+  const output = isWindows
+    ? run("ping.exe", ["-n", "4", "-w", "1000", host])
+    : run("/sbin/ping", ["-c", "4", "-n", "-W", "1000", host]);
   const samples = [...output.matchAll(/time=([\d.]+)\s*ms/g)].map((match) => Number(match[1])).filter(Number.isFinite);
   if (!samples.length) return { ping: 0, jitter: 0 };
   const sorted = [...samples].sort((a, b) => a - b);
@@ -603,6 +758,7 @@ const server = http.createServer((request, response) => {
 server.listen(PORT, HOST, () => {
   console.log(`Pulseboard Companion is running at http://${HOST}:${PORT}`);
   console.log("Live telemetry is available locally and through the encrypted relay.");
+  console.log(`Reporting ${staticDevice.role}: ${staticDevice.name}`);
 });
 
 const relayTimer = setInterval(() => void refreshTelemetry(), 5000);

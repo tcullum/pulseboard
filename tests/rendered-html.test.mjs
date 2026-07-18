@@ -46,13 +46,13 @@ test("includes a real, cancellable connection speed test", async () => {
   assert.match(page, /formatTick/);
   assert.match(page, /tickPosition/);
   assert.match(page, /Auto nearest edge/);
-  assert.match(page, /This Mac companion/);
+  assert.match(page, /Local companion/);
   assert.match(page, /Custom endpoint/);
   assert.match(page, /Public iPerf3 server/);
   assert.match(page, /IPERF3_TEST_URL/);
   assert.match(page, /us-los-angeles-leaseweb-26/);
   assert.match(page, /pulseboard-iperf3-server/);
-  assert.match(page, /iPhone control is intentionally disabled/);
+  assert.match(page, /Remote control is intentionally disabled/);
   assert.match(page, /LOCAL_SPEED_TEST_URL/);
   assert.match(page, /speedTestUrl/);
   assert.match(page, /normalizeSpeedBase/);
