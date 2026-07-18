@@ -36,9 +36,6 @@ export async function GET(request: Request) {
 
   const requestedDevice = new URL(request.url).searchParams.get("device");
   const [row, deviceRows] = await Promise.all([getLatestTelemetry(requestedDevice), listTelemetryDevices()]);
-  if (!row) return Response.json({ error: "No telemetry received yet" }, { status: 404 });
-
-  const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(row.received_at)) / 1000));
   const devices = deviceRows.results.map((deviceRow) => {
     const telemetry = JSON.parse(deviceRow.payload) as { device?: { id?: string; name?: string; platform?: string; os?: string; chip?: string } };
     const rowAgeSeconds = Math.max(0, Math.round((Date.now() - Date.parse(deviceRow.received_at)) / 1000));
@@ -53,6 +50,9 @@ export async function GET(request: Request) {
       stale: rowAgeSeconds > 30,
     };
   });
+  if (!row) return Response.json({ error: requestedDevice ? "No telemetry received for this device yet" : "No telemetry received yet", devices }, { status: 404 });
+
+  const ageSeconds = Math.max(0, Math.round((Date.now() - Date.parse(row.received_at)) / 1000));
   return Response.json({
     telemetry: JSON.parse(row.payload),
     devices,

@@ -73,10 +73,9 @@ export async function saveLatestTelemetry(payload: string, capturedAt: string, d
 export async function getLatestTelemetry(deviceId?: string | null) {
   await ensureTelemetryTable();
   if (deviceId) {
-    const row = await database().prepare(
+    return database().prepare(
       "SELECT device_id, payload, captured_at, received_at FROM telemetry_devices WHERE device_id = ?",
     ).bind(deviceId).first<TelemetryRow>();
-    if (row) return row;
   }
   const newest = await database().prepare(
     "SELECT device_id, payload, captured_at, received_at FROM telemetry_devices ORDER BY received_at DESC LIMIT 1",

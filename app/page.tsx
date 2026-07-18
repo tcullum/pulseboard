@@ -33,6 +33,8 @@ type TelemetryDevice = {
   chip: string;
   ageSeconds: number;
   stale: boolean;
+  displayName?: string;
+  eyebrow?: string;
 };
 
 type SpeedStage = "idle" | "ping" | "download" | "upload" | "complete" | "error";
@@ -48,6 +50,8 @@ const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const LOCAL_SPEED_TEST_URL = "http://127.0.0.1:4319/speed-test";
 const IPERF3_SERVERS_URL = "http://127.0.0.1:4319/iperf3/servers";
 const IPERF3_TEST_URL = "http://127.0.0.1:4319/iperf3/test";
+const WINDOWS_PLEX_ID = "windows-win-plex";
+const MACBOOK_ID = "device-thomas-s-macbook-pro";
 const SPEED_PHASE_MS = 12_000;
 const SPEED_RAMP_UP_MS = 2_000;
 // If the site is served over HTTP/2, these requests may multiplex over one TCP connection.
@@ -235,6 +239,34 @@ function platformLabel(platform?: string) {
   return platform === "windows" ? "Windows" : platform === "macos" ? "Mac" : "Device";
 }
 
+function isWindowsClient(device?: { id?: string; platform?: string; name?: string }) {
+  return device?.platform === "windows" || device?.id === WINDOWS_PLEX_ID || /win-plex|windows plex/i.test(device?.name || "");
+}
+
+function isMacBookClient(device?: { id?: string; platform?: string; name?: string }) {
+  return device?.platform === "macos" || device?.id === MACBOOK_ID || /thomas.*macbook pro/i.test(device?.name || "");
+}
+
+function clientDisplayName(device?: { id?: string; platform?: string; name?: string }) {
+  if (isWindowsClient(device)) return "Windows Plex";
+  if (isMacBookClient(device)) return "Thomas's MacBook Pro";
+  return device?.name || "Pulseboard client";
+}
+
+function clientEyebrow(device?: { id?: string; platform?: string; name?: string }) {
+  if (isWindowsClient(device)) return "Windows Plex";
+  if (isMacBookClient(device)) return "MacBook";
+  return platformLabel(device?.platform);
+}
+
+function selectedMatchesTelemetry(selectedId: string, telemetry: Telemetry) {
+  const actualId = deviceId(telemetry);
+  if (selectedId === actualId) return true;
+  if (selectedId === WINDOWS_PLEX_ID && isWindowsClient(telemetry.device)) return true;
+  if (selectedId === MACBOOK_ID && isMacBookClient(telemetry.device)) return true;
+  return false;
+}
+
 export default function Home() {
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
   const [status, setStatus] = useState<"connecting" | "live" | "offline">("connecting");
@@ -248,7 +280,7 @@ export default function Home() {
   const [transport, setTransport] = useState<"direct" | "relay" | null>(null);
   const [relayAgeSeconds, setRelayAgeSeconds] = useState(0);
   const [theme, setTheme] = useState<"night" | "day">("night");
-  const [selectedDeviceId, setSelectedDeviceId] = useState("local");
+  const [selectedDeviceId, setSelectedDeviceId] = useState(WINDOWS_PLEX_ID);
   const [relayDevices, setRelayDevices] = useState<TelemetryDevice[]>([]);
   const fetchInFlight = useRef<Promise<void> | null>(null);
   const [speedStage, setSpeedStage] = useState<SpeedStage>("idle");
@@ -281,41 +313,38 @@ export default function Home() {
       const controller = new AbortController();
       const timeout = window.setTimeout(() => controller.abort(), 1000);
       try {
-        if (selectedDeviceId === "local") {
-          const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
-          if (!response.ok) throw new Error("Companion unavailable");
-          const next = await response.json() as Telemetry;
-          setTelemetry(next);
-          setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
-          setStatus("live");
-          setTransport("direct");
-          setRelayAgeSeconds(0);
-          setRelayDevices((devices) => {
-            const local = { id: deviceId(next), name: next.device.name, platform: next.device.platform || "macos", os: next.device.os, chip: next.device.chip, ageSeconds: 0, stale: false };
-            return [local, ...devices.filter((device) => device.id !== local.id)];
-          });
-          void fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" })
-            .then(async (relayResponse) => {
-              if (!relayResponse.ok) return;
-              const relay = await relayResponse.json() as { devices?: TelemetryDevice[] };
-              if (relay.devices) setRelayDevices((devices) => [...devices, ...relay.devices!].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index));
-            })
-            .catch(() => {});
-          return;
-        }
-        throw new Error("Relay device selected");
+        const response = await fetch(COMPANION_URL, { cache: "no-store", mode: "cors", signal: controller.signal });
+        if (!response.ok) throw new Error("Companion unavailable");
+        const next = await response.json() as Telemetry;
+        if (!selectedMatchesTelemetry(selectedDeviceId, next)) throw new Error("Different local companion");
+        setTelemetry(next);
+        setCpuHistory((history) => [...history.slice(1), next.cpu.usage]);
+        setStatus("live");
+        setTransport("direct");
+        setRelayAgeSeconds(0);
+        setRelayDevices((devices) => {
+          const local = { id: deviceId(next), name: next.device.name, platform: next.device.platform || "macos", os: next.device.os, chip: next.device.chip, ageSeconds: 0, stale: false };
+          return [local, ...devices.filter((device) => device.id !== local.id)];
+        });
+        void fetch("/api/telemetry", { cache: "no-store", credentials: "same-origin" })
+          .then(async (relayResponse) => {
+            const relay = await relayResponse.json() as { devices?: TelemetryDevice[] };
+            if (relay.devices) setRelayDevices((devices) => [...devices, ...relay.devices!].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index));
+          })
+          .catch(() => {});
+        return;
       } catch {
         try {
-          const relayUrl = selectedDeviceId === "local" ? "/api/telemetry" : `/api/telemetry?device=${encodeURIComponent(selectedDeviceId)}`;
+          const relayUrl = `/api/telemetry?device=${encodeURIComponent(selectedDeviceId)}`;
           const relayResponse = await fetch(relayUrl, { cache: "no-store", credentials: "same-origin" });
-          if (!relayResponse.ok) throw new Error("Relay unavailable");
-          const relay = await relayResponse.json() as { telemetry: Telemetry; devices?: TelemetryDevice[]; ageSeconds: number; stale: boolean };
+          const relay = await relayResponse.json() as { telemetry?: Telemetry; devices?: TelemetryDevice[]; ageSeconds?: number; stale?: boolean };
           if (relay.devices) setRelayDevices(relay.devices);
+          if (!relayResponse.ok || !relay.telemetry) throw new Error("Relay unavailable");
           setTelemetry(relay.telemetry);
           setCpuHistory((history) => [...history.slice(1), relay.telemetry.cpu.usage]);
           setStatus("live");
           setTransport("relay");
-          setRelayAgeSeconds(relay.ageSeconds);
+          setRelayAgeSeconds(relay.ageSeconds || 0);
         } catch {
           setStatus("offline");
           setTransport(null);
@@ -701,7 +730,8 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if ([2500, 5000, 10000].includes(saved)) setRefreshInterval(saved);
     if (window.localStorage.getItem("pulseboard-theme") === "day") setTheme("day");
-    setSelectedDeviceId(window.localStorage.getItem("pulseboard-device") || "local");
+    const savedDevice = window.localStorage.getItem("pulseboard-device");
+    setSelectedDeviceId(!savedDevice || savedDevice === "local" ? WINDOWS_PLEX_ID : savedDevice);
     if (window.localStorage.getItem("pulseboard-speed-unit") === "MB/s") setSpeedUnit("MB/s");
     const savedServer = window.localStorage.getItem("pulseboard-speed-server");
     if (savedServer === "mac" || savedServer === "custom" || savedServer === "iperf3") setSpeedServer(savedServer);
@@ -809,18 +839,21 @@ export default function Home() {
   const compressedPercent = telemetry ? telemetry.memory.compressedBytes / telemetry.memory.totalBytes * 100 : 0;
   const appPercent = Math.max(0, memoryUsedPercent - wiredPercent - compressedPercent);
   const isHealthy = status === "live" && telemetry?.thermal.status === "Normal" && telemetry.memory.pressure !== "High";
-  const activePlatform = telemetry?.device.platform || "macos";
+  const activePlatform = telemetry?.device.platform || (selectedDeviceId === WINDOWS_PLEX_ID ? "windows" : "macos");
   const activePlatformName = platformLabel(activePlatform);
-  const activeRole = telemetry?.device.role || (activePlatform === "windows" ? "Windows 11 Plex client" : "MacBook");
+  const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
   const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
   const headline = status === "live"
     ? isHealthy
-      ? `${activeRole} is running smoothly.`
-      : `${activeRole} needs attention.`
-    : `Connect your ${selectedDeviceId === "local" ? "local companion" : activeRole} to begin.`;
+      ? `${activeDisplayName} is running smoothly.`
+      : `${activeDisplayName} needs attention.`
+    : `Connect ${activeDisplayName} to begin.`;
+  const windowsRelay = relayDevices.find(isWindowsClient);
+  const macRelay = relayDevices.find(isMacBookClient);
   const deviceOptions = [
-    { id: "local", name: "This machine", platform: "local", os: "127.0.0.1 companion", chip: "Direct" },
-    ...relayDevices,
+    { ...(windowsRelay || { id: WINDOWS_PLEX_ID, name: "Windows Plex", platform: "windows", os: "Windows 11 Plex client", chip: "" }), displayName: "Windows Plex", eyebrow: "Windows Plex" },
+    { ...(macRelay || { id: MACBOOK_ID, name: "Thomas's MacBook Pro", platform: "macos", os: "macOS", chip: "" }), displayName: "Thomas's MacBook Pro", eyebrow: "MacBook" },
+    ...relayDevices.filter((device) => !isWindowsClient(device) && !isMacBookClient(device)).map((device) => ({ ...device, displayName: clientDisplayName(device), eyebrow: clientEyebrow(device) })),
   ].filter((device, index, list) => list.findIndex((item) => item.id === device.id) === index);
   const isSpeedRunning = ["ping", "download", "upload"].includes(speedStage);
   const speedDisplay = speedResult ?? speedPartial;
@@ -862,13 +895,13 @@ export default function Home() {
         <header className="topbar">
           <div className="deviceLockup">
             <div className="deviceIcon" aria-hidden="true"><span /></div>
-            <div><p>{telemetry?.device.name || "Waiting for companion"}</p><span>{telemetry ? `${telemetry.device.chip} · ${gb(telemetry.memory.totalBytes, 0)} GB · ${telemetry.device.os}` : "Pulseboard Companion"}</span></div>
+            <div><p>{telemetry ? activeDisplayName : "Waiting for companion"}</p><span>{telemetry ? `${telemetry.device.chip} · ${gb(telemetry.memory.totalBytes, 0)} GB · ${telemetry.device.os}` : "Pulseboard Companion"}</span></div>
           </div>
           <div className="clientSwitch" aria-label="Pulseboard client">
             {deviceOptions.map((device) => (
               <button key={device.id} className={selectedDeviceId === device.id ? "selected" : ""} onClick={() => { setStatus("connecting"); setSelectedDeviceId(device.id); }}>
-                <span>{device.id === "local" ? "Local" : platformLabel(device.platform)}</span>
-                <b>{device.name}</b>
+                <span>{device.eyebrow}</span>
+                <b>{device.displayName}</b>
               </button>
             ))}
           </div>
@@ -889,7 +922,7 @@ export default function Home() {
           )}
 
           <section className="headingRow scrollTarget" id="overview">
-            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from your MacBook and Windows 11 Plex client.</p></div>
+            <div><p className="eyebrow">SYSTEM OVERVIEW</p><h1>{headline}</h1><p className="subhead">Real performance and health from Windows Plex and Thomas&apos;s MacBook Pro.</p></div>
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
@@ -930,7 +963,7 @@ export default function Home() {
 
           <section className="lowerGrid">
             <article className="card processCard scrollTarget" id="processes">
-              <div className="sectionHeader"><div><p className="label">TOP PROCESSES</p><h2>What&apos;s using {telemetry?.device.name || "this machine"}</h2></div><div className="segmented"><button className={sort === "cpu" ? "selected" : ""} onClick={() => setSort("cpu")}>CPU</button><button className={sort === "memory" ? "selected" : ""} onClick={() => setSort("memory")}>Memory</button></div></div>
+              <div className="sectionHeader"><div><p className="label">TOP PROCESSES</p><h2>What&apos;s using {telemetry ? activeDisplayName : "this machine"}</h2></div><div className="segmented"><button className={sort === "cpu" ? "selected" : ""} onClick={() => setSort("cpu")}>CPU</button><button className={sort === "memory" ? "selected" : ""} onClick={() => setSort("memory")}>Memory</button></div></div>
               <div className="processTable">
                 <div className="tableHead"><span>PROCESS</span><span>PID</span><span>CPU</span><span>MEMORY</span><span>ENERGY</span></div>
                 {processes.slice(0, 5).map((process, index) => (
