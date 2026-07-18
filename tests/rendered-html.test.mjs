@@ -65,6 +65,7 @@ test("surfaces Plex playback stream telemetry", async () => {
   assert.match(companion, /X-Plex-Token/);
   assert.match(companion, /TranscodeSession/);
   assert.match(page, /plexNowPlaying/);
+  assert.match(page, /showPlexCard = activePlatform === "windows"/);
   assert.match(page, /transcodeSessions/);
   assert.match(page, /bandwidthKbps/);
   assert.match(windowsInstaller, /PLEX_TOKEN/);
