@@ -51,6 +51,18 @@ test("keeps the dashboard focused on trustworthy telemetry", async () => {
   assert.match(companion, /thermalStats/);
 });
 
+test("hides unavailable thermal hardware on the Windows Plex client", async () => {
+  const [page, css] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+  ]);
+
+  assert.match(page, /showThermalCard = activePlatform !== "windows" && telemetry\?\.thermal\.available !== false/);
+  assert.match(page, /\{showThermalCard && \(/);
+  assert.match(page, /withoutThermal/);
+  assert.match(css, /\.metricsGrid\.withoutThermal/);
+});
+
 test("surfaces Plex playback stream telemetry", async () => {
   const [page, companion, windowsInstaller, macInstaller] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),

@@ -94,6 +94,7 @@ button.fleetCard:hover { transform:translateY(-1px); border-color:#315570; backg
 .dot.paused { background:var(--amber); animation:none; }
 .card { background:var(--panel); border:1px solid var(--line); border-radius:17px; box-shadow:0 18px 45px rgba(0,0,0,.10); }
 .metricsGrid { display:grid; grid-template-columns:1.3fr 1fr .85fr; gap:14px; }
+.metricsGrid.withoutThermal { grid-template-columns:1.15fr 1fr; }
 .metricsGrid .card { min-height:236px; padding:20px; }
 .cardHeader { display:flex; align-items:flex-start; justify-content:space-between; }
 .bigValue { font:600 34px/1 var(--font-geist-mono),monospace; letter-spacing:-.06em; }

@@ -731,9 +731,11 @@ export default function Home() {
   const compressedPercent = memoryTotal ? (telemetry!.memory.compressedBytes / memoryTotal) * 100 : 0;
   const appPercent = Math.max(0, memoryUsedPercent - wiredPercent - compressedPercent);
   const freeMemoryPercent = memoryTotal ? (telemetry!.memory.freeBytes / memoryTotal) * 100 : 0;
-  const sampleAgeSeconds = telemetry ? (transport === "relay" ? relayAgeSeconds : 0) : null;
-  const isHealthy = status === "live" && telemetry?.thermal.status !== "Elevated" && telemetry.memory.pressure !== "High";
   const activePlatform = telemetry?.device.platform || (selectedDeviceId === WINDOWS_PLEX_ID ? "windows" : "macos");
+  const sampleAgeSeconds = telemetry ? (transport === "relay" ? relayAgeSeconds : 0) : null;
+  const showThermalCard = activePlatform !== "windows" && telemetry?.thermal.available !== false;
+  const thermalNeedsAttention = showThermalCard && telemetry?.thermal.status !== "Normal";
+  const isHealthy = status === "live" && !thermalNeedsAttention && telemetry?.memory.pressure !== "High";
   const activePlatformName = platformLabel(activePlatform);
   const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
   const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
@@ -854,7 +856,7 @@ export default function Home() {
             <div className="updated"><span className={`dot ${paused ? "paused" : status === "offline" ? "offline" : ""}`} />{paused ? "Telemetry paused" : status === "live" ? `${transport === "relay" ? `Relay · ${relayAgeSeconds}s ago` : "Direct"} · ${new Date(telemetry!.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : status === "connecting" ? "Connecting…" : "Not connected"}</div>
           </section>
 
-          <section className="metricsGrid scrollTarget" id="performance">
+          <section className={`metricsGrid ${showThermalCard ? "" : "withoutThermal"} scrollTarget`} id="performance">
             <article className="card cpuCard">
               <div className="cardHeader"><div><p className="label">CPU LOAD</p><div className="bigValue">{cpu.toFixed(1)}<span>%</span></div></div>{status === "live" && <div className={`delta ${delta <= 0 ? "good" : "up"}`}>{delta <= 0 ? "↓" : "↑"} {Math.abs(delta).toFixed(1)}%</div>}</div>
               <div className="chart" aria-label={`CPU load ${cpu.toFixed(1)} percent`}>
@@ -874,12 +876,14 @@ export default function Home() {
               <div className="pressure"><span>Memory pressure</span><b className={(telemetry?.memory.pressure || "low").toLowerCase()}>{telemetry?.memory.pressure || "—"}</b></div>
             </article>
 
+            {showThermalCard && (
             <article className="card thermalCard">
               <div className="cardHeader"><div><p className="label">THERMAL PRESSURE</p><div className="thermalStatus">{telemetry?.thermal.status || "—"}</div></div><div className="thermalGlyph">°</div></div>
               <div className={`thermalScale ${telemetry?.thermal.available === false ? "unavailable" : ""}`}><span /><i style={{ left: telemetry?.thermal.status === "Normal" ? "18%" : telemetry?.thermal.status === "Elevated" ? "68%" : "18%" }} /></div>
               <div className="thermalLabels"><span>Normal</span><span>Elevated</span><span>Critical</span></div>
               <div className="fanRow"><span>{telemetry?.thermal.available === false ? "Windows thermal sensors" : "CPU speed limit"}</span><b>{telemetry?.thermal.available === false ? "Unavailable" : <>{telemetry?.thermal.speedLimit || 0}<small>%</small></>}</b></div>
             </article>
+            )}
           </section>
 
           <section className="quickGrid">
