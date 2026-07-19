@@ -63,6 +63,7 @@ type Telemetry = {
 type TelemetryDevice = {
   id: string;
   name: string;
+  model?: string;
   platform: string;
   os: string;
   chip: string;
@@ -141,7 +142,7 @@ function isLinuxDellFedora(device?: { id?: string; platform?: string; name?: str
   return device?.platform === "linux" && (/fedora/i.test(device?.name || "") || /fedora/i.test(device?.os || "")) && /xps|dell/i.test(device?.model || "");
 }
 
-function clientDisplayName(device?: { id?: string; platform?: string; name?: string }) {
+function clientDisplayName(device?: { id?: string; platform?: string; name?: string; model?: string; os?: string }) {
   if (isWindowsClient(device)) return "Windows Plex";
   if (isMacBookClient(device)) return "Thomas's MacBook Pro";
   if (isLinuxDellFedora(device)) return "Linux Dell Fedora";

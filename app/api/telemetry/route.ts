@@ -37,11 +37,12 @@ export async function GET(request: Request) {
   const requestedDevice = new URL(request.url).searchParams.get("device");
   const [row, deviceRows] = await Promise.all([getLatestTelemetry(requestedDevice), listTelemetryDevices()]);
   const devices = deviceRows.results.map((deviceRow) => {
-    const telemetry = JSON.parse(deviceRow.payload) as { device?: { id?: string; name?: string; platform?: string; os?: string; chip?: string } };
+    const telemetry = JSON.parse(deviceRow.payload) as { device?: { id?: string; name?: string; model?: string; platform?: string; os?: string; chip?: string } };
     const rowAgeSeconds = Math.max(0, Math.round((Date.now() - Date.parse(deviceRow.received_at)) / 1000));
     return {
       id: deviceRow.device_id || telemetry.device?.id || telemetryDeviceId(deviceRow.payload),
       name: telemetry.device?.name || "Pulseboard device",
+      model: telemetry.device?.model || "",
       platform: telemetry.device?.platform || "macos",
       os: telemetry.device?.os || "",
       chip: telemetry.device?.chip || "",

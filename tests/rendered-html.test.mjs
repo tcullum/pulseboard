@@ -86,13 +86,14 @@ test("surfaces Plex playback stream telemetry", async () => {
 });
 
 test("renders a three-slot fleet dashboard above machine details", async () => {
-  const [page, css, packageJson, linuxInstaller, linuxUninstaller, companion] = await Promise.all([
+  const [page, css, packageJson, linuxInstaller, linuxUninstaller, companion, route] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("package.json", root), "utf8"),
     readFile(new URL("companion/install-linux.sh", root), "utf8"),
     readFile(new URL("companion/uninstall-linux.sh", root), "utf8"),
     readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
+    readFile(new URL("app/api/telemetry/route.ts", root), "utf8"),
   ]);
 
   assert.match(page, /Pulseboard fleet/);
@@ -103,6 +104,7 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
   assert.match(page, /Add Fedora machine/);
   assert.match(page, /Linux Dell Fedora/);
   assert.match(page, /isLinuxDellFedora/);
+  assert.match(route, /model: telemetry\.device\?\.model/);
   assert.match(page, /platform === "linux"/);
   assert.match(css, /\.addMachinePanel/);
   assert.match(css, /\.setupCommand/);
