@@ -137,9 +137,14 @@ function isMacBookClient(device?: { id?: string; platform?: string; name?: strin
   return device?.platform === "macos" || device?.id === MACBOOK_ID || /thomas.*macbook pro/i.test(device?.name || "");
 }
 
+function isLinuxDellFedora(device?: { id?: string; platform?: string; name?: string; model?: string; os?: string }) {
+  return device?.platform === "linux" && (/fedora/i.test(device?.name || "") || /fedora/i.test(device?.os || "")) && /xps|dell/i.test(device?.model || "");
+}
+
 function clientDisplayName(device?: { id?: string; platform?: string; name?: string }) {
   if (isWindowsClient(device)) return "Windows Plex";
   if (isMacBookClient(device)) return "Thomas's MacBook Pro";
+  if (isLinuxDellFedora(device)) return "Linux Dell Fedora";
   return device?.name || "Pulseboard client";
 }
 

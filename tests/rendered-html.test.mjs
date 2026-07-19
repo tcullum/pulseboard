@@ -101,6 +101,8 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
   assert.match(page, /up to 3 dashboard slots/);
   assert.match(page, /SELECTED MACHINE/);
   assert.match(page, /Add Fedora machine/);
+  assert.match(page, /Linux Dell Fedora/);
+  assert.match(page, /isLinuxDellFedora/);
   assert.match(page, /platform === "linux"/);
   assert.match(css, /\.addMachinePanel/);
   assert.match(css, /\.setupCommand/);
