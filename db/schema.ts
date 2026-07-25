@@ -13,3 +13,16 @@ export const telemetryDevices = sqliteTable("telemetry_devices", {
   capturedAt: text("captured_at").notNull(),
   receivedAt: text("received_at").notNull(),
 });
+
+export const dockerCommands = sqliteTable("docker_commands", {
+  id: text("id").primaryKey(),
+  deviceId: text("device_id").notNull(),
+  containerName: text("container_name").notNull(),
+  action: text("action").notNull(),
+  status: text("status").notNull(),
+  requestedBy: text("requested_by").notNull(),
+  requestedAt: text("requested_at").notNull(),
+  claimedAt: text("claimed_at"),
+  completedAt: text("completed_at"),
+  result: text("result"),
+});

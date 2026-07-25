@@ -94,6 +94,15 @@ type FleetSnapshot = {
   stale: boolean;
 };
 
+type DockerAction = "start" | "stop" | "restart";
+
+type DockerCommandState = {
+  containerName: string;
+  action: DockerAction;
+  status: "pending" | "processing" | "succeeded" | "failed";
+  message: string;
+};
+
 const COMPANION_URL = "http://127.0.0.1:4319/telemetry";
 const WINDOWS_PLEX_ID = "windows-win-plex";
 const MACBOOK_ID = "device-thomas-s-macbook-pro";
@@ -192,6 +201,7 @@ export default function Home() {
   const [selectedDeviceId, setSelectedDeviceId] = useState(WINDOWS_PLEX_ID);
   const [relayDevices, setRelayDevices] = useState<TelemetryDevice[]>([]);
   const [fleetSnapshots, setFleetSnapshots] = useState<Record<string, FleetSnapshot>>({});
+  const [dockerCommand, setDockerCommand] = useState<DockerCommandState | null>(null);
   const fetchInFlight = useRef<Promise<void> | null>(null);
   const fleetFetchId = useRef(0);
   const missedTelemetryPolls = useRef(0);
@@ -332,6 +342,44 @@ export default function Home() {
     });
     return request;
   }, [refreshFleetSnapshots, selectedDeviceId]);
+
+  const runDockerAction = useCallback(async (containerName: string, action: DockerAction) => {
+    if ((action === "stop" || action === "restart") && !window.confirm(`${action === "stop" ? "Stop" : "Restart"} ${containerName}?`)) return;
+    setDockerCommand({ containerName, action, status: "pending", message: `${action === "restart" ? "Restarting" : action === "start" ? "Starting" : "Stopping"}...` });
+    try {
+      const response = await fetch("/api/docker-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({
+          deviceId: telemetry ? deviceId(telemetry) : selectedDeviceId,
+          containerName,
+          action,
+        }),
+      });
+      const queued = await response.json() as { command?: { id?: string }; error?: string };
+      if (!response.ok || !queued.command?.id) throw new Error(queued.error || "Command could not be queued");
+
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_250));
+        const statusResponse = await fetch(`/api/docker-control?id=${encodeURIComponent(queued.command.id)}`, { cache: "no-store", credentials: "same-origin" });
+        const result = await statusResponse.json() as { command?: { status?: DockerCommandState["status"]; result?: string | null }; error?: string };
+        if (!statusResponse.ok || !result.command?.status) throw new Error(result.error || "Command status is unavailable");
+        const commandStatus = result.command.status;
+        const message = result.command.result || `${action === "restart" ? "Restarting" : action === "start" ? "Starting" : "Stopping"}...`;
+        setDockerCommand({ containerName, action, status: commandStatus, message });
+        if (commandStatus === "succeeded" || commandStatus === "failed") {
+          void fetchTelemetry();
+          window.setTimeout(() => setDockerCommand((current) => current?.containerName === containerName ? null : current), 4_000);
+          return;
+        }
+      }
+      setDockerCommand({ containerName, action, status: "processing", message: "Command is still running" });
+    } catch (error) {
+      setDockerCommand({ containerName, action, status: "failed", message: error instanceof Error ? error.message : "Docker command failed" });
+      window.setTimeout(() => setDockerCommand((current) => current?.containerName === containerName ? null : current), 4_000);
+    }
+  }, [fetchTelemetry, selectedDeviceId, telemetry]);
 
   /* Legacy speed-test implementation removed from the interface.
   const runSpeedTest = useCallback(async () => {
@@ -764,6 +812,7 @@ export default function Home() {
   const plexSessions = plexPlayback?.items || [];
   const dockerHealth = telemetry?.docker;
   const dockerContainers = dockerHealth?.items || [];
+  const dockerControlsBusy = dockerCommand?.status === "pending" || dockerCommand?.status === "processing";
   const headline = status === "live"
     ? isHealthy
       ? `${activeDisplayName} is running smoothly.`
@@ -953,9 +1002,16 @@ export default function Home() {
                     <div className="dockerContainers" aria-label={`All ${dockerHealth?.total || dockerContainers.length} Docker containers`} tabIndex={0}>
                       {dockerContainers.map((container) => (
                         <div className="dockerContainer" key={`${container.name}-${container.state}-${container.health}`}>
-                          <div><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>
+                          <div className="dockerContainerTop"><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>
                           <small>{container.project || container.service || container.image}</small>
-                          <em>{container.status}</em>
+                          <div className="dockerContainerFooter">
+                            <em className={dockerCommand?.containerName === container.name && dockerCommand.status === "failed" ? "commandFailed" : ""}>{dockerCommand?.containerName === container.name ? dockerCommand.message : container.status}</em>
+                            <div className="dockerActions" aria-label={`${container.name} controls`}>
+                              <button type="button" title={`Start ${container.name}`} aria-label={`Start ${container.name}`} disabled={container.state === "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "start")}>▶</button>
+                              <button type="button" title={`Stop ${container.name}`} aria-label={`Stop ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "stop")}>■</button>
+                              <button type="button" title={`Restart ${container.name}`} aria-label={`Restart ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "restart")}>↻</button>
+                            </div>
+                          </div>
                         </div>
                       ))}
                     </div>

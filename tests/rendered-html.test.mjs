@@ -86,10 +86,12 @@ test("surfaces Plex playback stream telemetry", async () => {
 });
 
 test("surfaces Docker health on the Windows Plex dashboard", async () => {
-  const [page, css, companion] = await Promise.all([
+  const [page, css, companion, controlRoute, controlDb] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
     readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
+    readFile(new URL("app/api/docker-control/route.ts", root), "utf8"),
+    readFile(new URL("db/docker-control.ts", root), "utf8"),
   ]);
 
   assert.match(companion, /function dockerStats/);
@@ -100,9 +102,18 @@ test("surfaces Docker health on the Windows Plex dashboard", async () => {
   assert.match(page, /showDockerCard = activePlatform === "windows"/);
   assert.match(page, /DOCKER HEALTH/);
   assert.match(page, /All \$\{dockerHealth\?\.total/);
+  assert.match(page, /runDockerAction\(container\.name, "start"\)/);
+  assert.match(page, /runDockerAction\(container\.name, "stop"\)/);
+  assert.match(page, /runDockerAction\(container\.name, "restart"\)/);
   assert.match(css, /\.dockerCard/);
   assert.match(css, /\.dockerStats/);
   assert.match(css, /\.dockerContainers \{ max-height:520px;/);
+  assert.match(css, /\.dockerActions button/);
+  assert.match(companion, /processDockerCommand/);
+  assert.match(companion, /execFileSync\(binary, \[action, containerName\]/);
+  assert.match(controlRoute, /Authentication required/);
+  assert.match(controlRoute, /ACTIONS = new Set<DockerAction>/);
+  assert.match(controlDb, /CREATE TABLE IF NOT EXISTS docker_commands/);
 });
 
 test("renders a three-slot fleet dashboard above machine details", async () => {

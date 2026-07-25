@@ -892,6 +892,21 @@ function dockerStats() {
   return { available: true, status, detail, version, total: containers.length, running: runningContainers.length, healthy, unhealthy, exited, noHealth, items };
 }
 
+function runDockerCommand(action, containerName) {
+  if (!isWindows || !["start", "stop", "restart"].includes(action) || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(containerName)) {
+    return { ok: false, result: "Invalid Docker command." };
+  }
+  const binary = dockerBinary();
+  if (!binary) return { ok: false, result: "Docker CLI was not found." };
+  try {
+    const output = execFileSync(binary, [action, containerName], { encoding: "utf8", timeout: 35_000, maxBuffer: 512 * 1024 }).trim();
+    return { ok: true, result: output || `${action} completed` };
+  } catch (error) {
+    const detail = String(error?.stderr || error?.message || "Docker command failed").trim();
+    return { ok: false, result: detail.slice(0, 500) };
+  }
+}
+
 async function collectTelemetry() {
   const processes = processStats();
   const plex = plexStats(processes);
@@ -970,6 +985,60 @@ async function uploadTelemetry(snapshot) {
   }
 }
 
+let pendingDockerCompletion = null;
+
+async function sendDockerCompletion(config) {
+  if (!pendingDockerCompletion) return true;
+  try {
+    const response = await fetch(`${config.relayUrl}/api/docker-control`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.deviceToken}`,
+        "OAI-Sites-Authorization": `Bearer ${config.siwcToken}`,
+      },
+      body: JSON.stringify(pendingDockerCompletion),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!response.ok) return false;
+    pendingDockerCompletion = null;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function processDockerCommand() {
+  if (!isWindows) return false;
+  const config = relayConfig();
+  if (!config || !(await sendDockerCompletion(config))) return false;
+  try {
+    const response = await fetch(`${config.relayUrl}/api/docker-control?device=${encodeURIComponent(staticDevice.id)}`, {
+      headers: {
+        "Authorization": `Bearer ${config.deviceToken}`,
+        "OAI-Sites-Authorization": `Bearer ${config.siwcToken}`,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (response.status === 204) return false;
+    if (!response.ok) return false;
+    const payload = await response.json();
+    const command = payload?.command;
+    if (!command?.id) return false;
+    const outcome = runDockerCommand(String(command.action || ""), String(command.container_name || ""));
+    pendingDockerCompletion = {
+      id: String(command.id),
+      deviceId: staticDevice.id,
+      ok: outcome.ok,
+      result: outcome.result,
+    };
+    await sendDockerCompletion(config);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let latestTelemetry = initialTelemetry();
 let collecting = false;
 
@@ -979,6 +1048,10 @@ async function refreshTelemetry() {
   try {
     latestTelemetry = await collectTelemetry();
     await uploadTelemetry(latestTelemetry);
+    if (await processDockerCommand()) {
+      latestTelemetry = await collectTelemetry();
+      await uploadTelemetry(latestTelemetry);
+    }
   } finally {
     collecting = false;
   }
