@@ -105,6 +105,7 @@ test("surfaces Docker health on the Windows Plex dashboard", async () => {
   assert.match(page, /runDockerAction\(container\.name, "start"\)/);
   assert.match(page, /runDockerAction\(container\.name, "stop"\)/);
   assert.match(page, /runDockerAction\(container\.name, "restart"\)/);
+  assert.ok(page.indexOf('id="plex"') < page.indexOf('id="docker"'));
   assert.match(css, /\.dockerCard/);
   assert.match(css, /\.dockerStats/);
   assert.match(css, /\.dockerContainers \{ max-height:520px;/);

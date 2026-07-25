@@ -988,39 +988,6 @@ export default function Home() {
                 <div className="storageFacts"><div><span>Used</span><b>{gb(telemetry?.disk.usedBytes, 0)} GB</b></div><div><span>Available</span><b>{gb(telemetry?.disk.freeBytes, 0)} GB</b></div><div><span>Volume used</span><b>{telemetry?.disk.percent || 0}%</b></div></div>
               </article>
 
-              {showDockerCard && (
-                <article className="card dockerCard scrollTarget" id="docker">
-                  <div className="cardHeader"><div><p className="label">DOCKER HEALTH</p><h2>{dockerHealth?.status || "Waiting for Docker"}</h2></div><span className={`dockerBadge ${dockerHealth?.available ? (dockerHealth.unhealthy ? "attention" : "online") : ""}`}>{dockerHealth?.available ? (dockerHealth.unhealthy ? "Attention" : "Online") : "Offline"}</span></div>
-                  <p>{dockerHealth?.detail || "Monitor Docker Desktop and container health on this Windows client."}</p>
-                  <div className="dockerStats">
-                    <div><span>Running</span><b>{dockerHealth?.running || 0}</b></div>
-                    <div><span>Healthy</span><b>{dockerHealth?.healthy || 0}</b></div>
-                    <div><span>Attention</span><b>{dockerHealth?.unhealthy || 0}</b></div>
-                    <div><span>Stopped</span><b>{dockerHealth?.exited || 0}</b></div>
-                  </div>
-                  {dockerContainers.length > 0 ? (
-                    <div className="dockerContainers" aria-label={`All ${dockerHealth?.total || dockerContainers.length} Docker containers`} tabIndex={0}>
-                      {dockerContainers.map((container) => (
-                        <div className="dockerContainer" key={`${container.name}-${container.state}-${container.health}`}>
-                          <div className="dockerContainerTop"><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>
-                          <small>{container.project || container.service || container.image}</small>
-                          <div className="dockerContainerFooter">
-                            <em className={dockerCommand?.containerName === container.name && dockerCommand.status === "failed" ? "commandFailed" : ""}>{dockerCommand?.containerName === container.name ? dockerCommand.message : container.status}</em>
-                            <div className="dockerActions" aria-label={`${container.name} controls`}>
-                              <button type="button" title={`Start ${container.name}`} aria-label={`Start ${container.name}`} disabled={container.state === "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "start")}>▶</button>
-                              <button type="button" title={`Stop ${container.name}`} aria-label={`Stop ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "stop")}>■</button>
-                              <button type="button" title={`Restart ${container.name}`} aria-label={`Restart ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "restart")}>↻</button>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="dockerEmpty">{dockerHealth?.available ? "Docker is reachable with no containers to show." : "Start Docker Desktop to report container health."}</div>
-                  )}
-                </article>
-              )}
-
               {showPlexCard && (
                 <article className="card plexCard scrollTarget" id="plex">
                   <div className="cardHeader"><div><p className="label">PLEX CLIENT</p><h2>{telemetry?.plex?.status || "Waiting for Plex"}</h2></div><span className={`plexBadge ${telemetry?.plex?.available ? "online" : ""}`}>{plexPlayback?.sessions ? "Playing" : telemetry?.plex?.available ? "Active" : "Idle"}</span></div>
@@ -1053,6 +1020,39 @@ export default function Home() {
                     </div>
                   ) : (
                     <div className="plexEmpty">{plexPlayback?.configured ? (plexPlayback?.reachable ? "Plex server is reachable with no active playback." : "Plex token is configured, but the server is not reachable.") : "Plex server sessions need a local Plex token."}</div>
+                  )}
+                </article>
+              )}
+
+              {showDockerCard && (
+                <article className="card dockerCard scrollTarget" id="docker">
+                  <div className="cardHeader"><div><p className="label">DOCKER HEALTH</p><h2>{dockerHealth?.status || "Waiting for Docker"}</h2></div><span className={`dockerBadge ${dockerHealth?.available ? (dockerHealth.unhealthy ? "attention" : "online") : ""}`}>{dockerHealth?.available ? (dockerHealth.unhealthy ? "Attention" : "Online") : "Offline"}</span></div>
+                  <p>{dockerHealth?.detail || "Monitor Docker Desktop and container health on this Windows client."}</p>
+                  <div className="dockerStats">
+                    <div><span>Running</span><b>{dockerHealth?.running || 0}</b></div>
+                    <div><span>Healthy</span><b>{dockerHealth?.healthy || 0}</b></div>
+                    <div><span>Attention</span><b>{dockerHealth?.unhealthy || 0}</b></div>
+                    <div><span>Stopped</span><b>{dockerHealth?.exited || 0}</b></div>
+                  </div>
+                  {dockerContainers.length > 0 ? (
+                    <div className="dockerContainers" aria-label={`All ${dockerHealth?.total || dockerContainers.length} Docker containers`} tabIndex={0}>
+                      {dockerContainers.map((container) => (
+                        <div className="dockerContainer" key={`${container.name}-${container.state}-${container.health}`}>
+                          <div className="dockerContainerTop"><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>
+                          <small>{container.project || container.service || container.image}</small>
+                          <div className="dockerContainerFooter">
+                            <em className={dockerCommand?.containerName === container.name && dockerCommand.status === "failed" ? "commandFailed" : ""}>{dockerCommand?.containerName === container.name ? dockerCommand.message : container.status}</em>
+                            <div className="dockerActions" aria-label={`${container.name} controls`}>
+                              <button type="button" title={`Start ${container.name}`} aria-label={`Start ${container.name}`} disabled={container.state === "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "start")}>▶</button>
+                              <button type="button" title={`Stop ${container.name}`} aria-label={`Stop ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "stop")}>■</button>
+                              <button type="button" title={`Restart ${container.name}`} aria-label={`Restart ${container.name}`} disabled={container.state !== "running" || dockerControlsBusy} onClick={() => void runDockerAction(container.name, "restart")}>↻</button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="dockerEmpty">{dockerHealth?.available ? "Docker is reachable with no containers to show." : "Start Docker Desktop to report container health."}</div>
                   )}
                 </article>
               )}
