@@ -878,7 +878,7 @@ function dockerStats() {
     if (state === "running") return 2;
     return 3;
   };
-  const items = [...containers].sort((a, b) => itemScore(a) - itemScore(b)).slice(0, 5).map((item) => ({
+  const items = [...containers].sort((a, b) => itemScore(a) - itemScore(b) || String(a.Names || "").localeCompare(String(b.Names || ""))).map((item) => ({
     name: String(item.Names || item.ID || "container"),
     image: String(item.Image || ""),
     state: String(item.State || "unknown"),

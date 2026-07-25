@@ -168,7 +168,8 @@ button.fleetCard:hover { transform:translateY(-1px); border-color:#315570; backg
 .dockerStats div { min-height:50px; display:grid; align-content:center; gap:5px; padding:10px; border:1px solid rgba(126,152,173,.18); border-radius:9px; background:#0a1726; }
 .dockerStats span { color:#6e889b; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
 .dockerStats b { color:#dce8f1; font:600 13px var(--font-geist-mono),monospace; }
-.dockerContainers { display:grid; gap:8px; }
+.dockerContainers { max-height:520px; display:grid; gap:8px; padding-right:4px; overflow-y:auto; scrollbar-color:#365269 transparent; scrollbar-width:thin; }
+.dockerContainers:focus-visible { outline:1px solid var(--cyan); outline-offset:4px; }
 .dockerContainer { display:grid; gap:5px; padding:10px; border:1px solid rgba(126,152,173,.18); border-radius:10px; background:#0a1726; min-width:0; }
 .dockerContainer div { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:8px; min-width:0; }
 .dockerContainer b,.dockerContainer small,.dockerContainer em { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

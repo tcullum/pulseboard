@@ -950,7 +950,7 @@ export default function Home() {
                     <div><span>Stopped</span><b>{dockerHealth?.exited || 0}</b></div>
                   </div>
                   {dockerContainers.length > 0 ? (
-                    <div className="dockerContainers" aria-label="Docker containers">
+                    <div className="dockerContainers" aria-label={`All ${dockerHealth?.total || dockerContainers.length} Docker containers`} tabIndex={0}>
                       {dockerContainers.map((container) => (
                         <div className="dockerContainer" key={`${container.name}-${container.state}-${container.health}`}>
                           <div><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>

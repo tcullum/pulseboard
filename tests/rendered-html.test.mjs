@@ -96,11 +96,13 @@ test("surfaces Docker health on the Windows Plex dashboard", async () => {
   assert.match(companion, /dockerBinary/);
   assert.match(companion, /HealthStatus/);
   assert.match(companion, /"ps", "-a", "--format", "\{\{json \.\}\}"/);
+  assert.doesNotMatch(companion, /itemScore\(a\) - itemScore\(b\)\)\.slice\(0, 5\)/);
   assert.match(page, /showDockerCard = activePlatform === "windows"/);
   assert.match(page, /DOCKER HEALTH/);
-  assert.match(page, /dockerContainers/);
+  assert.match(page, /All \$\{dockerHealth\?\.total/);
   assert.match(css, /\.dockerCard/);
   assert.match(css, /\.dockerStats/);
+  assert.match(css, /\.dockerContainers \{ max-height:520px;/);
 });
 
 test("renders a three-slot fleet dashboard above machine details", async () => {
