@@ -821,8 +821,81 @@ async function plexStats(processes) {
   };
 }
 
+function dockerBinary() {
+  if (!isWindows) return "";
+  const candidates = [
+    process.env.DOCKER_PATH,
+    "docker.exe",
+    path.join(process.env.ProgramFiles || "C:\\Program Files", "Docker", "Docker", "resources", "bin", "docker.exe"),
+    path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Docker", "Docker", "resources", "bin", "docker.exe"),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (run(candidate, ["--version"], 1500)) return candidate;
+  }
+  return "";
+}
+
+function dockerLabel(labels, key) {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return String(labels || "").match(new RegExp(`(?:^|,)${escaped}=([^,]*)`))?.[1] || "";
+}
+
+function dockerStats() {
+  const empty = { available: false, status: "Unavailable", detail: "Docker health is reported by the Windows Plex companion.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] };
+  if (!isWindows) return empty;
+  const binary = dockerBinary();
+  if (!binary) return { ...empty, status: "Not installed", detail: "Docker CLI was not found on this Windows client." };
+
+  const version = run(binary, ["version", "--format", "{{.Server.Version}}"], 2500);
+  const output = run(binary, ["ps", "-a", "--format", "{{json .}}"], 4000);
+  if (!output) return { ...empty, status: "Daemon offline", detail: "Docker Desktop is installed but the daemon is not reachable.", version };
+
+  const containers = output.split("\n").map((line) => {
+    try {
+      return JSON.parse(line);
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+  const runningContainers = containers.filter((item) => String(item.State || "").toLowerCase() === "running");
+  const healthy = runningContainers.filter((item) => String(item.HealthStatus || "").toLowerCase() === "healthy").length;
+  const unhealthy = runningContainers.filter((item) => String(item.HealthStatus || "").toLowerCase() === "unhealthy").length;
+  const exited = containers.length - runningContainers.length;
+  const noHealth = runningContainers.length - healthy - unhealthy;
+  const status = unhealthy ? "Needs attention" : runningContainers.length ? "Running" : containers.length ? "Stopped" : "No containers";
+  const detail = unhealthy
+    ? `${unhealthy} running container${unhealthy === 1 ? "" : "s"} reported unhealthy.`
+    : runningContainers.length
+      ? `${runningContainers.length} running container${runningContainers.length === 1 ? "" : "s"}; ${healthy} healthy checks.`
+      : containers.length
+        ? "Docker is reachable, but no containers are running."
+        : "Docker is reachable with no containers.";
+  const itemScore = (item) => {
+    const state = String(item.State || "").toLowerCase();
+    const health = String(item.HealthStatus || "none").toLowerCase();
+    if (state === "running" && health === "unhealthy") return 0;
+    if (state === "running" && health === "healthy") return 1;
+    if (state === "running") return 2;
+    return 3;
+  };
+  const items = [...containers].sort((a, b) => itemScore(a) - itemScore(b)).slice(0, 5).map((item) => ({
+    name: String(item.Names || item.ID || "container"),
+    image: String(item.Image || ""),
+    state: String(item.State || "unknown"),
+    health: String(item.HealthStatus || "none"),
+    status: String(item.Status || ""),
+    project: dockerLabel(item.Labels, "com.docker.compose.project"),
+    service: dockerLabel(item.Labels, "com.docker.compose.service"),
+    ports: String(item.Ports || ""),
+  }));
+
+  return { available: true, status, detail, version, total: containers.length, running: runningContainers.length, healthy, unhealthy, exited, noHealth, items };
+}
+
 async function collectTelemetry() {
   const processes = processStats();
+  const plex = plexStats(processes);
+  const docker = dockerStats();
   return {
     timestamp: new Date().toISOString(),
     device: staticDevice,
@@ -835,7 +908,8 @@ async function collectTelemetry() {
     system: { loadAverage: isWindows ? [] : os.loadavg().map((value) => Number(value.toFixed(2))) },
     uptimeSeconds: os.uptime(),
     processes,
-    plex: await plexStats(processes),
+    plex: await plex,
+    docker,
   };
 }
 
@@ -863,6 +937,7 @@ function initialTelemetry() {
     plex: isWindows
       ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity.", playback: { configured: false, reachable: false, server: "Checking", sessions: 0, transcodeSessions: 0, items: [] } }
       : { available: false, status: isMac ? "Mac companion" : "Linux companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex playback is shown on the Windows Plex client.", playback: { configured: false, reachable: false, server: isMac ? "Mac companion" : "Linux companion", sessions: 0, transcodeSessions: 0, items: [] } },
+    docker: { available: false, status: isWindows ? "Checking" : "Unavailable", detail: isWindows ? "Pulseboard is checking Docker Desktop." : "Docker health is reported by the Windows Plex companion.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] },
   };
 }
 

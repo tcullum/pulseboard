@@ -159,6 +159,25 @@ button.fleetCard:hover { transform:translateY(-1px); border-color:#315570; backg
 .plexSessionMeta { display:grid; grid-template-columns:1.2fr 1fr auto; gap:8px; min-width:0; color:#6f889c; font-size:8px; }
 .plexSessionMeta span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .plexEmpty { min-height:54px; display:grid; place-items:center; padding:11px; border:1px dashed rgba(126,152,173,.22); border-radius:10px; color:#6f889c; font-size:9px; text-align:center; line-height:1.45; }
+.dockerCard { display:grid; gap:14px; padding:20px; background:linear-gradient(180deg,#102132,#0b1a29); }
+.dockerCard p { margin:0; color:#8ba2b4; font-size:10px; line-height:1.5; }
+.dockerBadge { padding:5px 8px; border:1px solid #55462f; border-radius:999px; background:rgba(244,184,90,.08); color:var(--amber); font-size:9px; font-weight:750; }
+.dockerBadge.online { border-color:#244d43; background:rgba(94,230,168,.08); color:var(--green); }
+.dockerBadge.attention { border-color:#6a3b44; background:rgba(232,120,120,.09); color:#f09a9a; }
+.dockerStats { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+.dockerStats div { min-height:50px; display:grid; align-content:center; gap:5px; padding:10px; border:1px solid rgba(126,152,173,.18); border-radius:9px; background:#0a1726; }
+.dockerStats span { color:#6e889b; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.dockerStats b { color:#dce8f1; font:600 13px var(--font-geist-mono),monospace; }
+.dockerContainers { display:grid; gap:8px; }
+.dockerContainer { display:grid; gap:5px; padding:10px; border:1px solid rgba(126,152,173,.18); border-radius:10px; background:#0a1726; min-width:0; }
+.dockerContainer div { display:grid; grid-template-columns:auto minmax(0,1fr); align-items:center; gap:8px; min-width:0; }
+.dockerContainer b,.dockerContainer small,.dockerContainer em { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dockerContainer b { color:#eef6ff; font-size:11px; }
+.dockerContainer small,.dockerContainer em { color:#6f889c; font-size:8px; font-style:normal; }
+.dockerState { padding:4px 6px; border-radius:6px; background:rgba(126,152,173,.11); color:#8ba2b4; font-size:8px; font-weight:800; text-transform:uppercase; letter-spacing:.06em; }
+.dockerState.online { background:rgba(94,230,168,.08); color:var(--green); }
+.dockerState.attention { background:rgba(232,120,120,.09); color:#f09a9a; }
+.dockerEmpty { min-height:54px; display:grid; place-items:center; padding:11px; border:1px dashed rgba(126,152,173,.22); border-radius:10px; color:#6f889c; font-size:9px; text-align:center; line-height:1.45; }
 .batteryTop { display:flex;align-items:center;gap:15px}.batteryIcon{width:61px;height:28px;border:2px solid #557185;border-radius:7px;padding:3px;position:relative}.batteryIcon:after{content:"";position:absolute;right:-6px;top:7px;width:3px;height:9px;background:#557185;border-radius:0 2px 2px 0}.batteryIcon span{display:block;height:100%;background:var(--green);border-radius:3px}.batteryIcon.unavailable span{background:#71899b}.batteryTop>div:last-child{display:grid;gap:3px}.batteryTop b{font:600 20px var(--font-geist-mono),monospace}.batteryTop span{font-size:9px;color:var(--green)}.batteryIcon.unavailable + div span{color:var(--muted)}.batteryFacts{display:grid;grid-template-columns:repeat(3,1fr);margin-top:18px;padding-top:14px;border-top:1px solid var(--line)}.batteryFacts div{display:grid;gap:5px}.batteryFacts span{color:#6e889b;font-size:8px}.batteryFacts b{font:550 10px var(--font-geist-mono),monospace}.batteryFacts div:not(:first-child){padding-left:14px;border-left:1px solid var(--line)}
 .history { min-height:150px;margin-top:14px;padding:20px;display:grid;grid-template-columns:180px 1fr 170px;gap:18px;align-items:center}.historyMeta { display:block;color:var(--muted);font-size:9px;margin-top:7px }.historyBars{height:92px;display:flex;align-items:flex-end;gap:5px;border-bottom:1px solid var(--line)}.historyBars i{flex:1;background:#1e93a4;border-radius:2px 2px 0 0;opacity:.5}.historyBars i:nth-child(4n){background:var(--cyan);opacity:.85}.historySummary { display:grid;grid-template-columns:auto 1fr;gap:5px 9px;align-items:baseline;padding-left:14px;border-left:1px solid var(--line) }.historySummary b { font:600 17px var(--font-geist-mono),monospace }.historySummary span { color:var(--muted);font-size:9px }footer{display:flex;justify-content:space-between;padding:22px 2px 0;color:#567286;font:500 9px var(--font-geist-mono),monospace}
 .statusGrid { display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:14px }.statusCard { min-height:112px;padding:18px 20px;display:grid;align-content:center;gap:7px;border-radius:14px }.statusCard .label { margin:0 }.statusCard h2 { color:#dce8f1;font:600 15px var(--font-geist-mono),monospace;letter-spacing:-.02em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap }.statusCard span { color:var(--muted);font-size:9px }
@@ -234,11 +253,11 @@ button.fleetCard:hover { transform:translateY(-1px); border-color:#315570; backg
 .themeDay .fleetCardTop b,.themeDay .fleetVitals b { color:#2a3d48; }
 .themeDay .fleetVitals div { background:#fff; }
 .themeDay .addMachine { background:#f3f8fa; }
-.themeDay .plexCard { background:#fff; }
-.themeDay .plexStats div,.themeDay .plexSession { background:#f7fafb; }
-.themeDay .plexStats b,.themeDay .plexSessionTop b { color:#2a3d48; }
+.themeDay .plexCard,.themeDay .dockerCard { background:#fff; }
+.themeDay .plexStats div,.themeDay .plexSession,.themeDay .dockerStats div,.themeDay .dockerContainer { background:#f7fafb; }
+.themeDay .plexStats b,.themeDay .plexSessionTop b,.themeDay .dockerStats b,.themeDay .dockerContainer b { color:#2a3d48; }
 .themeDay .plexProgress { background:#e6eef2; }
-.themeDay .plexEmpty { background:#f9fbfc; }
+.themeDay .plexEmpty,.themeDay .dockerEmpty { background:#f9fbfc; }
 .themeDay .thermalGlyph { border-color:#d5e0e6; background:#f7fafb; }
 .themeDay .miniCard { background:#f9fbfc; box-shadow:0 6px 18px rgba(38,63,78,.035); }.themeDay .miniCard>.mark { border-color:#c9e1e5; background:#eaf6f7; }
 .themeDay .segmented,.themeDay .rangeControl { background:#f2f6f8; }.themeDay .segmented button.selected,.themeDay .rangeControl button.selected { background:#fff; color:#244b5a; box-shadow:0 1px 5px rgba(37,67,82,.1); }

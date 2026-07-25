@@ -58,6 +58,19 @@ type Telemetry = {
       }>;
     };
   };
+  docker?: {
+    available: boolean;
+    status: string;
+    detail: string;
+    version?: string;
+    total: number;
+    running: number;
+    healthy: number;
+    unhealthy: number;
+    exited: number;
+    noHealth: number;
+    items: Array<{ name: string; image: string; state: string; health: string; status: string; project?: string; service?: string; ports?: string }>;
+  };
 };
 
 type TelemetryDevice = {
@@ -746,8 +759,11 @@ export default function Home() {
   const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
   const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
   const showPlexCard = activePlatform === "windows";
+  const showDockerCard = activePlatform === "windows";
   const plexPlayback = telemetry?.plex?.playback;
   const plexSessions = plexPlayback?.items || [];
+  const dockerHealth = telemetry?.docker;
+  const dockerContainers = dockerHealth?.items || [];
   const headline = status === "live"
     ? isHealthy
       ? `${activeDisplayName} is running smoothly.`
@@ -922,6 +938,32 @@ export default function Home() {
                 <div className="storageBar simple"><i style={{ width: `${telemetry?.disk.percent || 0}%` }} /></div>
                 <div className="storageFacts"><div><span>Used</span><b>{gb(telemetry?.disk.usedBytes, 0)} GB</b></div><div><span>Available</span><b>{gb(telemetry?.disk.freeBytes, 0)} GB</b></div><div><span>Volume used</span><b>{telemetry?.disk.percent || 0}%</b></div></div>
               </article>
+
+              {showDockerCard && (
+                <article className="card dockerCard scrollTarget" id="docker">
+                  <div className="cardHeader"><div><p className="label">DOCKER HEALTH</p><h2>{dockerHealth?.status || "Waiting for Docker"}</h2></div><span className={`dockerBadge ${dockerHealth?.available ? (dockerHealth.unhealthy ? "attention" : "online") : ""}`}>{dockerHealth?.available ? (dockerHealth.unhealthy ? "Attention" : "Online") : "Offline"}</span></div>
+                  <p>{dockerHealth?.detail || "Monitor Docker Desktop and container health on this Windows client."}</p>
+                  <div className="dockerStats">
+                    <div><span>Running</span><b>{dockerHealth?.running || 0}</b></div>
+                    <div><span>Healthy</span><b>{dockerHealth?.healthy || 0}</b></div>
+                    <div><span>Attention</span><b>{dockerHealth?.unhealthy || 0}</b></div>
+                    <div><span>Stopped</span><b>{dockerHealth?.exited || 0}</b></div>
+                  </div>
+                  {dockerContainers.length > 0 ? (
+                    <div className="dockerContainers" aria-label="Docker containers">
+                      {dockerContainers.map((container) => (
+                        <div className="dockerContainer" key={`${container.name}-${container.state}-${container.health}`}>
+                          <div><span className={`dockerState ${container.health === "unhealthy" ? "attention" : container.state === "running" ? "online" : ""}`}>{container.health && container.health !== "none" ? container.health : container.state}</span><b>{container.name}</b></div>
+                          <small>{container.project || container.service || container.image}</small>
+                          <em>{container.status}</em>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="dockerEmpty">{dockerHealth?.available ? "Docker is reachable with no containers to show." : "Start Docker Desktop to report container health."}</div>
+                  )}
+                </article>
+              )}
 
               {showPlexCard && (
                 <article className="card plexCard scrollTarget" id="plex">

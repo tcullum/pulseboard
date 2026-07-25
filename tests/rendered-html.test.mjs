@@ -85,6 +85,24 @@ test("surfaces Plex playback stream telemetry", async () => {
   assert.match(macInstaller, /PLEX_TOKEN/);
 });
 
+test("surfaces Docker health on the Windows Plex dashboard", async () => {
+  const [page, css, companion] = await Promise.all([
+    readFile(new URL("app/page.tsx", root), "utf8"),
+    readFile(new URL("app/globals.css", root), "utf8"),
+    readFile(new URL("companion/pulseboard-telemetry.mjs", root), "utf8"),
+  ]);
+
+  assert.match(companion, /function dockerStats/);
+  assert.match(companion, /dockerBinary/);
+  assert.match(companion, /HealthStatus/);
+  assert.match(companion, /"ps", "-a", "--format", "\{\{json \.\}\}"/);
+  assert.match(page, /showDockerCard = activePlatform === "windows"/);
+  assert.match(page, /DOCKER HEALTH/);
+  assert.match(page, /dockerContainers/);
+  assert.match(css, /\.dockerCard/);
+  assert.match(css, /\.dockerStats/);
+});
+
 test("renders a three-slot fleet dashboard above machine details", async () => {
   const [page, css, packageJson, linuxInstaller, linuxUninstaller, companion, route] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
