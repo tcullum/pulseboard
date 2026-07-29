@@ -78,10 +78,7 @@ private struct StatusPopover: View {
         .disabled(model.isRefreshing)
 
         Menu {
-          Toggle("Launch at Login", isOn: Binding(
-            get: { model.launchAtLogin },
-            set: { model.setLaunchAtLogin($0) }
-          ))
+          Label("Starts at Login", systemImage: "checkmark.circle")
           Divider()
           Button("Quit Pulseboard Status") {
             NSApplication.shared.terminate(nil)

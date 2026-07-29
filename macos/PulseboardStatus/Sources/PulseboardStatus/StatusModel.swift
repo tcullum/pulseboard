@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Security
-import ServiceManagement
 import SwiftUI
 
 enum DeviceState: String, Codable, Sendable {
@@ -61,11 +60,14 @@ final class StatusModel: ObservableObject {
   ]
   @Published var isRefreshing = false
   @Published var errorMessage: String?
-  @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
 
   private let endpoint = URL(string: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site/api/fleet-status")!
   private let dashboard = URL(string: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site")!
   private var pollingTask: Task<Void, Never>?
+
+  private init() {
+    Task { [weak self] in self?.start() }
+  }
 
   var summary: String {
     let online = devices.filter { $0.status == .online }.count
@@ -127,21 +129,6 @@ final class StatusModel: ObservableObject {
 
   func openPulseboard() {
     NSWorkspace.shared.open(dashboard)
-  }
-
-  func setLaunchAtLogin(_ enabled: Bool) {
-    do {
-      if enabled {
-        try SMAppService.mainApp.register()
-      } else {
-        try SMAppService.mainApp.unregister()
-      }
-      launchAtLogin = SMAppService.mainApp.status == .enabled
-      errorMessage = nil
-    } catch {
-      launchAtLogin = SMAppService.mainApp.status == .enabled
-      errorMessage = "Launch at Login couldn’t be changed."
-    }
   }
 }
 

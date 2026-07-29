@@ -10,6 +10,7 @@ swift build -c release
 mkdir -p "$APP_PATH/Contents/MacOS"
 cp "$PROJECT_DIR/.build/release/PulseboardStatus" "$APP_PATH/Contents/MacOS/PulseboardStatus"
 cp "$PROJECT_DIR/Info.plist" "$APP_PATH/Contents/Info.plist"
+xattr -cr "$APP_PATH"
 codesign --force --deep --sign - "$APP_PATH"
 
 echo "$APP_PATH"

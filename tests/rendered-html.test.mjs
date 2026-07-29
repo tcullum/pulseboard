@@ -159,11 +159,13 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
 });
 
 test("provides a private three-client feed for the macOS menu bar utility", async () => {
-  const [route, app, model, packageManifest] = await Promise.all([
+  const [route, app, model, packageManifest, installer, launchAgent] = await Promise.all([
     readFile(new URL("app/api/fleet-status/route.ts", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/PulseboardStatusApp.swift", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/StatusModel.swift", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Package.swift", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/install-app.sh", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/com.pulseboard.status.plist", root), "utf8"),
   ]);
 
   assert.match(route, /PULSEBOARD_STATUS_TOKEN/);
@@ -173,9 +175,11 @@ test("provides a private three-client feed for the macOS menu bar utility", asyn
   assert.match(route, /Linux Dell Fedora/);
   assert.match(route, /Cache-Control.*no-store/s);
   assert.match(app, /MenuBarExtra/);
-  assert.match(app, /Launch at Login/);
+  assert.match(app, /Starts at Login/);
   assert.match(model, /Task\.sleep\(for: \.seconds\(15\)\)/);
   assert.match(model, /OAI-Sites-Authorization/);
   assert.match(model, /com\.pulseboard\.status/);
   assert.match(packageManifest, /\.macOS\(\.v14\)/);
+  assert.match(installer, /launchctl bootstrap/);
+  assert.match(launchAgent, /RunAtLoad/);
 });
