@@ -157,3 +157,25 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
   assert.match(companion, /\/proc\/meminfo/);
   assert.match(companion, /\/proc\/net\/dev/);
 });
+
+test("provides a private three-client feed for the macOS menu bar utility", async () => {
+  const [route, app, model, packageManifest] = await Promise.all([
+    readFile(new URL("app/api/fleet-status/route.ts", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/PulseboardStatusApp.swift", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/StatusModel.swift", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/Package.swift", root), "utf8"),
+  ]);
+
+  assert.match(route, /PULSEBOARD_STATUS_TOKEN/);
+  assert.match(route, /statusForAge/);
+  assert.match(route, /Thomas's MacBook Pro/);
+  assert.match(route, /Windows Plex/);
+  assert.match(route, /Linux Dell Fedora/);
+  assert.match(route, /Cache-Control.*no-store/s);
+  assert.match(app, /MenuBarExtra/);
+  assert.match(app, /Launch at Login/);
+  assert.match(model, /Task\.sleep\(for: \.seconds\(15\)\)/);
+  assert.match(model, /OAI-Sites-Authorization/);
+  assert.match(model, /com\.pulseboard\.status/);
+  assert.match(packageManifest, /\.macOS\(\.v14\)/);
+});
