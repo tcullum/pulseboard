@@ -75,9 +75,7 @@ final class StatusModel: ObservableObject {
   }
 
   var menuBarSymbol: String {
-    if devices.allSatisfy({ $0.status == .online }) { return "circle.fill" }
-    if devices.contains(where: { $0.status == .online || $0.status == .stale }) { return "circle.lefthalf.filled" }
-    return "circle"
+    devices.allSatisfy({ $0.status == .online }) ? "circle" : "xmark.circle"
   }
 
   var menuBarAccessibilityLabel: String {
