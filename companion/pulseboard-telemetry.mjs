@@ -822,13 +822,20 @@ async function plexStats(processes) {
 }
 
 function dockerBinary() {
-  if (!isWindows) return "";
-  const candidates = [
-    process.env.DOCKER_PATH,
-    "docker.exe",
-    path.join(process.env.ProgramFiles || "C:\\Program Files", "Docker", "Docker", "resources", "bin", "docker.exe"),
-    path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Docker", "Docker", "resources", "bin", "docker.exe"),
-  ].filter(Boolean);
+  if (!isWindows && !isLinux) return "";
+  const candidates = (isWindows
+    ? [
+        process.env.DOCKER_PATH,
+        "docker.exe",
+        path.join(process.env.ProgramFiles || "C:\\Program Files", "Docker", "Docker", "resources", "bin", "docker.exe"),
+        path.join(process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)", "Docker", "Docker", "resources", "bin", "docker.exe"),
+      ]
+    : [
+        process.env.DOCKER_PATH,
+        "docker",
+        "/usr/bin/docker",
+        "/usr/local/bin/docker",
+      ]).filter(Boolean);
   for (const candidate of candidates) {
     if (run(candidate, ["--version"], 1500)) return candidate;
   }
@@ -841,22 +848,23 @@ function dockerLabel(labels, key) {
 }
 
 function dockerStats() {
-  const empty = { available: false, status: "Unavailable", detail: "Docker health is reported by the Windows Plex companion.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] };
-  if (!isWindows) return empty;
+  const clientName = isWindows ? "Windows client" : isLinux ? "Fedora client" : "this client";
+  const empty = { available: false, status: "Unavailable", detail: "Docker health is available on Windows and Fedora clients.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] };
+  if (!isWindows && !isLinux) return empty;
   const binary = dockerBinary();
-  if (!binary) return { ...empty, status: "Not installed", detail: "Docker CLI was not found on this Windows client." };
+  if (!binary) return { ...empty, status: "Not installed", detail: `Docker CLI was not found on this ${clientName}.` };
 
   const version = run(binary, ["version", "--format", "{{.Server.Version}}"], 2500);
   const output = run(binary, ["ps", "-a", "--format", "{{json .}}"], 4000);
-  if (!output) return { ...empty, status: "Daemon offline", detail: "Docker Desktop is installed but the daemon is not reachable.", version };
+  if (!output && !version) return { ...empty, status: "Daemon offline", detail: `Docker is installed, but the ${clientName} cannot reach the daemon.`, version };
 
-  const containers = output.split("\n").map((line) => {
+  const containers = output ? output.split("\n").map((line) => {
     try {
       return JSON.parse(line);
     } catch {
       return null;
     }
-  }).filter(Boolean);
+  }).filter(Boolean) : [];
   const runningContainers = containers.filter((item) => String(item.State || "").toLowerCase() === "running");
   const healthy = runningContainers.filter((item) => String(item.HealthStatus || "").toLowerCase() === "healthy").length;
   const unhealthy = runningContainers.filter((item) => String(item.HealthStatus || "").toLowerCase() === "unhealthy").length;
@@ -893,7 +901,7 @@ function dockerStats() {
 }
 
 function runDockerCommand(action, containerName) {
-  if (!isWindows || !["start", "stop", "restart"].includes(action) || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(containerName)) {
+  if ((!isWindows && !isLinux) || !["start", "stop", "restart"].includes(action) || !/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/.test(containerName)) {
     return { ok: false, result: "Invalid Docker command." };
   }
   const binary = dockerBinary();
@@ -952,7 +960,7 @@ function initialTelemetry() {
     plex: isWindows
       ? { available: false, status: "Checking", processes: 0, cpu: 0, memoryBytes: 0, detail: "Pulseboard is checking Plex activity.", playback: { configured: false, reachable: false, server: "Checking", sessions: 0, transcodeSessions: 0, items: [] } }
       : { available: false, status: isMac ? "Mac companion" : "Linux companion", processes: 0, cpu: 0, memoryBytes: 0, detail: "Plex playback is shown on the Windows Plex client.", playback: { configured: false, reachable: false, server: isMac ? "Mac companion" : "Linux companion", sessions: 0, transcodeSessions: 0, items: [] } },
-    docker: { available: false, status: isWindows ? "Checking" : "Unavailable", detail: isWindows ? "Pulseboard is checking Docker Desktop." : "Docker health is reported by the Windows Plex companion.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] },
+    docker: { available: false, status: isWindows || isLinux ? "Checking" : "Unavailable", detail: isWindows ? "Pulseboard is checking Docker Desktop." : isLinux ? "Pulseboard is checking Docker on Fedora." : "Docker health is available on Windows and Fedora clients.", version: "", total: 0, running: 0, healthy: 0, unhealthy: 0, exited: 0, noHealth: 0, items: [] },
   };
 }
 
@@ -1009,7 +1017,7 @@ async function sendDockerCompletion(config) {
 }
 
 async function processDockerCommand() {
-  if (!isWindows) return false;
+  if (!isWindows && !isLinux) return false;
   const config = relayConfig();
   if (!config || !(await sendDockerCompletion(config))) return false;
   try {

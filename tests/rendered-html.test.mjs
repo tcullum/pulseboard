@@ -85,7 +85,7 @@ test("surfaces Plex playback stream telemetry", async () => {
   assert.match(macInstaller, /PLEX_TOKEN/);
 });
 
-test("surfaces Docker health on the Windows Plex dashboard", async () => {
+test("surfaces Docker health and controls on Windows and Fedora dashboards", async () => {
   const [page, css, companion, controlRoute, controlDb] = await Promise.all([
     readFile(new URL("app/page.tsx", root), "utf8"),
     readFile(new URL("app/globals.css", root), "utf8"),
@@ -99,7 +99,10 @@ test("surfaces Docker health on the Windows Plex dashboard", async () => {
   assert.match(companion, /HealthStatus/);
   assert.match(companion, /"ps", "-a", "--format", "\{\{json \.\}\}"/);
   assert.doesNotMatch(companion, /itemScore\(a\) - itemScore\(b\)\)\.slice\(0, 5\)/);
-  assert.match(page, /showDockerCard = activePlatform === "windows"/);
+  assert.match(companion, /if \(!isWindows && !isLinux\) return ""/);
+  assert.match(companion, /"\/usr\/bin\/docker"/);
+  assert.match(page, /showDockerCard = activePlatform === "windows" \|\| activePlatform === "linux"/);
+  assert.match(page, /dockerClientName = activePlatform === "linux" \? "Fedora client"/);
   assert.match(page, /DOCKER HEALTH/);
   assert.match(page, /All \$\{dockerHealth\?\.total/);
   assert.match(page, /runDockerAction\(container\.name, "start"\)/);
@@ -111,6 +114,7 @@ test("surfaces Docker health on the Windows Plex dashboard", async () => {
   assert.match(css, /\.dockerContainers \{ max-height:520px;/);
   assert.match(css, /\.dockerActions button/);
   assert.match(companion, /processDockerCommand/);
+  assert.match(companion, /if \(!isWindows && !isLinux\) return false/);
   assert.match(companion, /execFileSync\(binary, \[action, containerName\]/);
   assert.match(controlRoute, /Authentication required/);
   assert.match(controlRoute, /ACTIONS = new Set<DockerAction>/);

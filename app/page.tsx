@@ -807,7 +807,8 @@ export default function Home() {
   const activeDisplayName = telemetry ? clientDisplayName(telemetry.device) : selectedDeviceId === WINDOWS_PLEX_ID ? "Windows Plex" : "Thomas's MacBook Pro";
   const connectionLabel = status === "offline" ? `${activePlatformName} feed offline` : isHealthy ? "All systems normal" : "Checking system";
   const showPlexCard = activePlatform === "windows";
-  const showDockerCard = activePlatform === "windows";
+  const showDockerCard = activePlatform === "windows" || activePlatform === "linux";
+  const dockerClientName = activePlatform === "linux" ? "Fedora client" : "Windows client";
   const plexPlayback = telemetry?.plex?.playback;
   const plexSessions = plexPlayback?.items || [];
   const dockerHealth = telemetry?.docker;
@@ -1027,7 +1028,7 @@ export default function Home() {
               {showDockerCard && (
                 <article className="card dockerCard scrollTarget" id="docker">
                   <div className="cardHeader"><div><p className="label">DOCKER HEALTH</p><h2>{dockerHealth?.status || "Waiting for Docker"}</h2></div><span className={`dockerBadge ${dockerHealth?.available ? (dockerHealth.unhealthy ? "attention" : "online") : ""}`}>{dockerHealth?.available ? (dockerHealth.unhealthy ? "Attention" : "Online") : "Offline"}</span></div>
-                  <p>{dockerHealth?.detail || "Monitor Docker Desktop and container health on this Windows client."}</p>
+                  <p>{dockerHealth?.detail || `Monitor Docker and container health on this ${dockerClientName}.`}</p>
                   <div className="dockerStats">
                     <div><span>Running</span><b>{dockerHealth?.running || 0}</b></div>
                     <div><span>Healthy</span><b>{dockerHealth?.healthy || 0}</b></div>
@@ -1052,7 +1053,7 @@ export default function Home() {
                       ))}
                     </div>
                   ) : (
-                    <div className="dockerEmpty">{dockerHealth?.available ? "Docker is reachable with no containers to show." : "Start Docker Desktop to report container health."}</div>
+                    <div className="dockerEmpty">{dockerHealth?.available ? "Docker is reachable with no containers to show." : activePlatform === "linux" ? "Start Docker and make sure the Pulseboard user can access its socket." : "Start Docker Desktop to report container health."}</div>
                   )}
                 </article>
               )}
