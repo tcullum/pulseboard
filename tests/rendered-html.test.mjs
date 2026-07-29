@@ -159,13 +159,15 @@ test("renders a three-slot fleet dashboard above machine details", async () => {
 });
 
 test("provides a private three-client feed for the macOS menu bar utility", async () => {
-  const [route, app, model, packageManifest, installer, launchAgent] = await Promise.all([
+  const [route, app, model, packageManifest, installer, launchAgent, infoPlist, builder] = await Promise.all([
     readFile(new URL("app/api/fleet-status/route.ts", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/PulseboardStatusApp.swift", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Sources/PulseboardStatus/StatusModel.swift", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/Package.swift", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/install-app.sh", root), "utf8"),
     readFile(new URL("macos/PulseboardStatus/com.pulseboard.status.plist", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/Info.plist", root), "utf8"),
+    readFile(new URL("macos/PulseboardStatus/build-app.sh", root), "utf8"),
   ]);
 
   assert.match(route, /PULSEBOARD_STATUS_TOKEN/);
@@ -182,4 +184,6 @@ test("provides a private three-client feed for the macOS menu bar utility", asyn
   assert.match(packageManifest, /\.macOS\(\.v14\)/);
   assert.match(installer, /launchctl bootstrap/);
   assert.match(launchAgent, /RunAtLoad/);
+  assert.match(infoPlist, /CFBundleIconFile/);
+  assert.match(builder, /iconutil -c icns/);
 });
