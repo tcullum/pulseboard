@@ -30,6 +30,5 @@ SIZES
 
 iconutil -c icns "$ICONSET_PATH" -o "$APP_PATH/Contents/Resources/AppIcon.icns"
 xattr -cr "$APP_PATH"
-codesign --force --deep --sign - "$APP_PATH"
 
 echo "$APP_PATH"
