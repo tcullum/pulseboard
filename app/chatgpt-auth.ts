@@ -1,3 +1,4 @@
+import { env } from "cloudflare:workers";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -17,6 +18,12 @@ const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
+  const runtime = env as unknown as { PULSEBOARD_LOCAL_MODE?: string; PULSEBOARD_LOCAL_OWNER_EMAIL?: string };
+  if (runtime.PULSEBOARD_LOCAL_MODE === "true") {
+    const email = runtime.PULSEBOARD_LOCAL_OWNER_EMAIL || "thomas@pulseboard.local";
+    return { displayName: "Thomas", email, fullName: "Thomas" };
+  }
+
   const requestHeaders = await headers();
   const email = requestHeaders.get(USER_EMAIL_HEADER);
   if (!email) return null;
