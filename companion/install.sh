@@ -2,11 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="${0:A:h}"
+NODE_PATH="$(command -v node)"
 PLIST_PATH="$HOME/Library/LaunchAgents/com.pulseboard.telemetry.plist"
 CONFIG_DIR="$HOME/Library/Application Support/Pulseboard"
 LOG_DIR="$CONFIG_DIR/logs"
 CONFIG_PATH="$CONFIG_DIR/relay.json"
 RUNTIME_DIR="$HOME/.local/lib/pulseboard"
+RELAY_URL="${PULSEBOARD_RELAY_URL:-https://pulse.cullum.dad}"
 
 mkdir -p "$LOG_DIR" "$CONFIG_DIR"
 mkdir -p "$RUNTIME_DIR"
@@ -21,6 +23,7 @@ if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" || -n "${PULSEBOARD_SIWC_TOKEN:-}" || -n 
   PULSEBOARD_SIWC_TOKEN="${PULSEBOARD_SIWC_TOKEN:-}" \
   PULSEBOARD_LOCAL_USERNAME="${PULSEBOARD_LOCAL_USERNAME:-}" \
   PULSEBOARD_LOCAL_PASSWORD="${PULSEBOARD_LOCAL_PASSWORD:-}" \
+  PULSEBOARD_RELAY_URL="$RELAY_URL" \
   PLEX_TOKEN="${PLEX_TOKEN:-}" \
   PLEX_URL="${PLEX_URL:-}" \
   "$NODE_PATH" -e '
@@ -28,7 +31,7 @@ if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" || -n "${PULSEBOARD_SIWC_TOKEN:-}" || -n 
     let config = {};
     try { config = JSON.parse(fs.readFileSync(process.env.PULSEBOARD_CONFIG_PATH, "utf8")); } catch {}
     if (process.env.PULSEBOARD_RELAY_TOKEN && process.env.PULSEBOARD_SIWC_TOKEN) {
-      config.relayUrl = "https://pulse.cullum.dad";
+      config.relayUrl = process.env.PULSEBOARD_RELAY_URL;
       config.deviceToken = process.env.PULSEBOARD_RELAY_TOKEN;
       config.siwcToken = process.env.PULSEBOARD_SIWC_TOKEN;
     }

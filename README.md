@@ -52,6 +52,7 @@ See [SELF_HOSTING.md](SELF_HOSTING.md) for the concise deployment checklist.
 ## Companion installation
 
 The companion reads relay credentials from its platform-specific `relay.json` file and installs as a background service.
+Set `PULSEBOARD_RELAY_URL` only when using a different hosted or self-hosted relay; it defaults to `https://pulse.cullum.dad`.
 
 ### Windows
 
@@ -71,6 +72,14 @@ Plex settings are optional. The token stays in the local companion configuration
 PULSEBOARD_RELAY_TOKEN="your-device-token" \
 PULSEBOARD_SIWC_TOKEN="your-sites-token" \
 npm run telemetry:install:mac
+```
+
+To rebuild the macOS status utility after a clean checkout:
+
+```bash
+cd macos/PulseboardStatus
+bash build-app.sh
+bash install-app.sh
 ```
 
 ### Linux/Fedora

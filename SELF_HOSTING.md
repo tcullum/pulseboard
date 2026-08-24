@@ -5,7 +5,7 @@ Pulseboard can run locally in Docker with persistent D1-compatible storage.
 1. Create `.env.docker` from `.env.docker.example` and set unique credentials.
 2. Run `docker compose up -d --build`.
 3. Open `http://localhost:4320` or the host's LAN/Tailscale address on port 4320.
-4. Point each companion's `relayUrl` at the reachable local address and set its `deviceToken` to `TELEMETRY_TOKEN`.
+4. Set `PULSEBOARD_RELAY_URL` to the reachable local address, then point each companion at it and set its `deviceToken` to `TELEMETRY_TOKEN`.
 
 The container requires HTTP Basic authentication. Docker control commands are still executed by the Windows companion, so the container does not mount the Docker socket.
 

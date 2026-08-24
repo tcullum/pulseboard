@@ -8,6 +8,7 @@ $configPath = Join-Path $configDir "relay.json"
 $launcherPath = Join-Path $configDir "launch-hidden.vbs"
 $logDir = Join-Path $env:LOCALAPPDATA "Pulseboard\Logs"
 $taskName = "Pulseboard Companion"
+$relayUrl = if ($env:PULSEBOARD_RELAY_URL) { $env:PULSEBOARD_RELAY_URL } else { "https://pulse.cullum.dad" }
 
 New-Item -ItemType Directory -Force -Path $configDir, $logDir | Out-Null
 
@@ -20,7 +21,7 @@ if ($env:PULSEBOARD_RELAY_TOKEN -or $env:PULSEBOARD_SIWC_TOKEN -or $env:PLEX_TOK
     }
   }
   if ($env:PULSEBOARD_RELAY_TOKEN -and $env:PULSEBOARD_SIWC_TOKEN) {
-    $config["relayUrl"] = "https://pulseboard-mac-monitor.rysingsun.chatgpt.site"
+    $config["relayUrl"] = $relayUrl
     $config["deviceToken"] = $env:PULSEBOARD_RELAY_TOKEN
     $config["siwcToken"] = $env:PULSEBOARD_SIWC_TOKEN
   }

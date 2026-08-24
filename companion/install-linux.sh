@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NODE_PATH="$(command -v node)"
+RELAY_URL="${PULSEBOARD_RELAY_URL:-https://pulse.cullum.dad}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Pulseboard"
 CONFIG_PATH="$CONFIG_DIR/relay.json"
 SYSTEMD_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
@@ -15,6 +16,7 @@ if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" || -n "${PULSEBOARD_SIWC_TOKEN:-}" || -n 
   PULSEBOARD_CONFIG_PATH="$CONFIG_PATH" \
   PULSEBOARD_RELAY_TOKEN="${PULSEBOARD_RELAY_TOKEN:-}" \
   PULSEBOARD_SIWC_TOKEN="${PULSEBOARD_SIWC_TOKEN:-}" \
+  PULSEBOARD_RELAY_URL="$RELAY_URL" \
   PLEX_TOKEN="${PLEX_TOKEN:-}" \
   PLEX_URL="${PLEX_URL:-}" \
   "$NODE_PATH" -e '
@@ -22,7 +24,7 @@ if [[ -n "${PULSEBOARD_RELAY_TOKEN:-}" || -n "${PULSEBOARD_SIWC_TOKEN:-}" || -n 
     let config = {};
     try { config = JSON.parse(fs.readFileSync(process.env.PULSEBOARD_CONFIG_PATH, "utf8")); } catch {}
     if (process.env.PULSEBOARD_RELAY_TOKEN && process.env.PULSEBOARD_SIWC_TOKEN) {
-      config.relayUrl = "https://pulseboard-mac-monitor.rysingsun.chatgpt.site";
+      config.relayUrl = process.env.PULSEBOARD_RELAY_URL;
       config.deviceToken = process.env.PULSEBOARD_RELAY_TOKEN;
       config.siwcToken = process.env.PULSEBOARD_SIWC_TOKEN;
     }
