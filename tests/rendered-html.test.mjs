@@ -180,7 +180,7 @@ test("provides a private three-client feed for the macOS menu bar utility", asyn
   assert.match(app, /Starts at Login/);
   assert.match(model, /Task\.sleep\(for: \.seconds\(15\)\)/);
   assert.match(model, /\? "circle" : "xmark\.circle"/);
-  assert.match(model, /OAI-Sites-Authorization/);
+  assert.match(model, /X-Pulseboard-Authorization/);
   assert.match(model, /com\.pulseboard\.status/);
   assert.match(packageManifest, /\.macOS\(\.v14\)/);
   assert.match(installer, /launchctl bootstrap/);

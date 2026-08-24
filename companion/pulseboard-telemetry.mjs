@@ -24,8 +24,9 @@ const CONFIG_PATH = isWindows
   : isMac
     ? path.join(os.homedir(), "Library", "Application Support", "Pulseboard", "relay.json")
     : path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"), "Pulseboard", "relay.json");
+const AUTH_CONFIG_PATH = path.join(path.dirname(CONFIG_PATH), "relay-auth.json");
 const ALLOWED_ORIGINS = new Set([
-  "https://pulseboard-mac-monitor.rysingsun.chatgpt.site",
+  "https://pulse.cullum.dad",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ]);
@@ -229,6 +230,19 @@ function readConfig() {
   try {
     const config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8"));
     return config && typeof config === "object" ? config : {};
+  } catch {
+    return {};
+  }
+}
+
+function readRelayAuth() {
+  try {
+    const auth = JSON.parse(fs.readFileSync(AUTH_CONFIG_PATH, "utf8"));
+    if (!auth || typeof auth !== "object") return {};
+    return {
+      basicUsername: auth.basicUsername || auth.username || "",
+      basicPassword: auth.basicPassword || auth.password || "",
+    };
   } catch {
     return {};
   }
@@ -965,9 +979,18 @@ function initialTelemetry() {
 }
 
 function relayConfig() {
-  const config = readConfig();
-  if (!config.relayUrl || !config.deviceToken || !config.siwcToken) return null;
+  const config = { ...readConfig(), ...readRelayAuth() };
+  if (!config.relayUrl || !config.deviceToken || !config.basicUsername || !config.basicPassword) return null;
   return config;
+}
+
+function relayAuthHeaders(config) {
+  const basicCredential = Buffer.from(`${config.basicUsername}:${config.basicPassword}`).toString("base64");
+  return {
+    "Content-Type": "application/json",
+    "Authorization": `Basic ${basicCredential}`,
+    "X-Pulseboard-Authorization": `Bearer ${config.deviceToken}`,
+  };
 }
 
 async function uploadTelemetry(snapshot) {
@@ -979,11 +1002,7 @@ async function uploadTelemetry(snapshot) {
   try {
     const response = await fetch(`${config.relayUrl}/api/telemetry`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.deviceToken}`,
-        "OAI-Sites-Authorization": `Bearer ${config.siwcToken}`,
-      },
+      headers: relayAuthHeaders(config),
       body: JSON.stringify(snapshot),
       signal: AbortSignal.timeout(8000),
     });
@@ -1000,11 +1019,7 @@ async function sendDockerCompletion(config) {
   try {
     const response = await fetch(`${config.relayUrl}/api/docker-control`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.deviceToken}`,
-        "OAI-Sites-Authorization": `Bearer ${config.siwcToken}`,
-      },
+      headers: relayAuthHeaders(config),
       body: JSON.stringify(pendingDockerCompletion),
       signal: AbortSignal.timeout(8000),
     });

@@ -49,6 +49,27 @@ private struct FleetResponse: Codable, Sendable {
   let devices: [FleetDevice]
 }
 
+private struct LocalTelemetryResponse: Codable, Sendable {
+  let timestamp: String
+  let device: LocalDevice
+}
+
+private struct LocalDevice: Codable, Sendable {
+  let id: String?
+  let name: String
+  let platform: String
+}
+
+private struct RelayConfig: Codable, Sendable {
+  let relayUrl: String
+  let deviceToken: String
+}
+
+private struct RelayAuth: Codable, Sendable {
+  let username: String
+  let password: String
+}
+
 @MainActor
 final class StatusModel: ObservableObject {
   static let shared = StatusModel()
@@ -61,12 +82,14 @@ final class StatusModel: ObservableObject {
   @Published var isRefreshing = false
   @Published var errorMessage: String?
 
-  private let endpoint = URL(string: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site/api/fleet-status")!
-  private let dashboard = URL(string: "https://pulseboard-mac-monitor.rysingsun.chatgpt.site")!
+  private let localEndpoint = URL(string: "http://127.0.0.1:4319/telemetry")!
+  private let dashboard = URL(string: "https://pulse.cullum.dad")!
+  private let telemetryAgent = "com.pulseboard.telemetry"
+  private var lastRepairAttempt: Date?
   private var pollingTask: Task<Void, Never>?
 
   private init() {
-    Task { [weak self] in self?.start() }
+    start()
   }
 
   var summary: String {
@@ -94,8 +117,8 @@ final class StatusModel: ObservableObject {
 
   func refresh() async {
     guard !isRefreshing else { return }
-    guard let statusToken = Keychain.read(account: "status-token"),
-          let sitesToken = Keychain.read(account: "sites-token") else {
+    guard let relayConfig = readRelayConfig(), let relayAuth = readRelayAuth(),
+          let endpoint = URL(string: relayConfig.relayUrl + "/api/fleet-status") else {
       errorMessage = "Pulseboard credentials are not installed."
       return
     }
@@ -103,11 +126,14 @@ final class StatusModel: ObservableObject {
     isRefreshing = true
     defer { isRefreshing = false }
 
+    await ensureTelemetryCompanion()
+
     var request = URLRequest(url: endpoint)
     request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
     request.timeoutInterval = 8
-    request.setValue("Bearer \(statusToken)", forHTTPHeaderField: "Authorization")
-    request.setValue("Bearer \(sitesToken)", forHTTPHeaderField: "OAI-Sites-Authorization")
+    let basic = Data("\(relayAuth.username):\(relayAuth.password)".utf8).base64EncodedString()
+    request.setValue("Basic \(basic)", forHTTPHeaderField: "Authorization")
+    request.setValue("Bearer \(relayConfig.deviceToken)", forHTTPHeaderField: "X-Pulseboard-Authorization")
 
     do {
       let (data, response) = try await URLSession.shared.data(for: request)
@@ -118,10 +144,108 @@ final class StatusModel: ObservableObject {
       devices = payload.devices
       errorMessage = nil
     } catch {
+      await refreshLocalFallback()
+    }
+  }
+
+  private func readRelayConfig() -> RelayConfig? {
+    let url = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/Pulseboard/relay.json")
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(RelayConfig.self, from: data)
+  }
+
+  private func readRelayAuth() -> RelayAuth? {
+    let url = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/Pulseboard/relay-auth.json")
+    guard let data = try? Data(contentsOf: url) else { return nil }
+    return try? JSONDecoder().decode(RelayAuth.self, from: data)
+  }
+
+  private func refreshLocalFallback() async {
+    repairTelemetryCompanionIfNeeded()
+
+    var localRequest = URLRequest(url: localEndpoint)
+    localRequest.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    localRequest.timeoutInterval = 3
+
+    do {
+      let (data, response) = try await URLSession.shared.data(for: localRequest)
+      guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        throw URLError(.badServerResponse)
+      }
+      let payload = try JSONDecoder().decode(LocalTelemetryResponse.self, from: data)
+      let now = Date()
+      devices = devices.map { device in
+        let isLocalMac = device.platform == payload.device.platform && payload.device.platform == "macos"
+        return FleetDevice(
+          id: device.id,
+          name: isLocalMac ? payload.device.name : device.name,
+          platform: device.platform,
+          ageSeconds: isLocalMac ? 0 : nil,
+          status: isLocalMac ? .online : .offline,
+          lastSeenAt: isLocalMac ? ISO8601DateFormatter().string(from: now) : nil
+        )
+      }
+      errorMessage = "Remote status feed unavailable; showing this Mac."
+    } catch {
       devices = devices.map {
         FleetDevice(id: $0.id, name: $0.name, platform: $0.platform, ageSeconds: $0.ageSeconds, status: .offline, lastSeenAt: $0.lastSeenAt)
       }
-      errorMessage = "Couldn’t reach the Pulseboard status feed."
+      errorMessage = "Couldn’t reach Pulseboard telemetry."
+    }
+  }
+
+  private func ensureTelemetryCompanion() async {
+    var request = URLRequest(url: localEndpoint)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.timeoutInterval = 2
+    do {
+      let (_, response) = try await URLSession.shared.data(for: request)
+      guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        throw URLError(.badServerResponse)
+      }
+    } catch {
+      repairTelemetryCompanionIfNeeded()
+    }
+  }
+
+  private func repairTelemetryCompanionIfNeeded() {
+    let now = Date()
+    if let lastRepairAttempt, now.timeIntervalSince(lastRepairAttempt) < 60 {
+      return
+    }
+    lastRepairAttempt = now
+
+    let domain = "gui/\(getuid())"
+    let plist = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/LaunchAgents/com.pulseboard.telemetry.plist")
+      .path
+
+    if launchctl(["print", "\(domain)/\(telemetryAgent)"]) == 0 {
+      _ = launchctl(["kickstart", "-k", "\(domain)/\(telemetryAgent)"])
+      return
+    }
+
+    guard FileManager.default.fileExists(atPath: plist) else { return }
+    _ = launchctl(["bootstrap", domain, plist])
+    _ = launchctl(["enable", "\(domain)/\(telemetryAgent)"])
+    _ = launchctl(["kickstart", "-k", "\(domain)/\(telemetryAgent)"])
+  }
+
+  @discardableResult
+  private func launchctl(_ arguments: [String]) -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    do {
+      try process.run()
+      process.waitUntilExit()
+      return process.terminationStatus
+    } catch {
+      return -1
     }
   }
 

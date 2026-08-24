@@ -4,9 +4,10 @@
 <dict>
   <key>Label</key><string>com.pulseboard.telemetry</string>
   <key>ProgramArguments</key>
-  <array><string>__NODE__</string><string>__SCRIPT__</string></array>
+  <array><string>/bin/zsh</string><string>__LAUNCHER__</string></array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>__LOG_DIR__/companion.log</string>
   <key>StandardErrorPath</key><string>__LOG_DIR__/companion-error.log</string>
 </dict>
