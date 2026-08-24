@@ -1,0 +1,15 @@
+services:
+  pulseboard:
+    build:
+      context: .
+    container_name: pulseboard
+    restart: always
+    ports:
+      - "4320:3000"
+    env_file:
+      - .env.docker
+    volumes:
+      - pulseboard-data:/data
+
+volumes:
+  pulseboard-data:

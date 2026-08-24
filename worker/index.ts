@@ -5,6 +5,10 @@ import handler from "vinext/server/app-router-entry";
 interface Env {
   ASSETS: Fetcher;
   DB: D1Database;
+  PULSEBOARD_LOCAL_MODE?: string;
+  PULSEBOARD_LOCAL_USERNAME?: string;
+  PULSEBOARD_LOCAL_PASSWORD?: string;
+  TELEMETRY_TOKEN?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -12,6 +16,30 @@ interface Env {
       };
     };
   };
+}
+
+async function equalCredentials(left: string, right: string) {
+  if (!left || !right) return false;
+  const encoder = new TextEncoder();
+  const [leftHash, rightHash] = await Promise.all([
+    crypto.subtle.digest("SHA-256", encoder.encode(left)),
+    crypto.subtle.digest("SHA-256", encoder.encode(right)),
+  ]);
+  const a = new Uint8Array(leftHash);
+  const b = new Uint8Array(rightHash);
+  let difference = 0;
+  for (let index = 0; index < a.length; index += 1) difference |= a[index] ^ b[index];
+  return difference === 0;
+}
+
+async function localAccessAllowed(request: Request, env: Env) {
+  if (env.PULSEBOARD_LOCAL_MODE !== "true") return true;
+  const authorization = request.headers.get("authorization") || "";
+  const basic = `Basic ${btoa(`${env.PULSEBOARD_LOCAL_USERNAME || "thomas"}:${env.PULSEBOARD_LOCAL_PASSWORD || ""}`)}`;
+  if (await equalCredentials(authorization, basic)) return true;
+  const url = new URL(request.url);
+  const bearer = `Bearer ${env.TELEMETRY_TOKEN || ""}`;
+  return url.pathname.startsWith("/api/") && await equalCredentials(authorization, bearer);
 }
 
 interface ExecutionContext {
@@ -28,6 +56,13 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (!(await localAccessAllowed(request, env))) {
+      return new Response("Authentication required", {
+        status: 401,
+        headers: { "WWW-Authenticate": 'Basic realm="Pulseboard"', "Cache-Control": "no-store" },
+      });
+    }
 
     if (url.pathname === "/_vinext/image") {
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];

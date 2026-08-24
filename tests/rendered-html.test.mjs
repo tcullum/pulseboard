@@ -188,3 +188,21 @@ test("provides a private three-client feed for the macOS menu bar utility", asyn
   assert.match(infoPlist, /CFBundleIconFile/);
   assert.match(builder, /iconutil -c icns/);
 });
+
+test("supports an authenticated self-hosted Docker runtime", async () => {
+  const [worker, auth, dockerfile, compose, entrypoint] = await Promise.all([
+    readFile(new URL("worker/index.ts", root), "utf8"),
+    readFile(new URL("app/chatgpt-auth.ts", root), "utf8"),
+    readFile(new URL("Dockerfile", root), "utf8"),
+    readFile(new URL("docker-compose.yml", root), "utf8"),
+    readFile(new URL("docker-entrypoint.sh", root), "utf8"),
+  ]);
+
+  assert.match(worker, /PULSEBOARD_LOCAL_MODE/);
+  assert.match(worker, /WWW-Authenticate/);
+  assert.match(worker, /TELEMETRY_TOKEN/);
+  assert.match(auth, /thomas@pulseboard\.local/);
+  assert.match(dockerfile, /HEALTHCHECK/);
+  assert.match(compose, /pulseboard-data/);
+  assert.match(entrypoint, /--persist-to \/data/);
+});
